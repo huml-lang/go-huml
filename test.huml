@@ -1,0 +1,53 @@
+# This is the root dictionary for our application configuration.
+application_config::
+  # This is the root dictionary for our application configuration.
+  application_name: "HUML Showcase Suite"
+  version: "1.0.0-beta"
+  environment: "development" # Can be 'production', 'staging', etc.
+  debug_mode: true
+  retry_attempts: 5
+  timeout_seconds: 30.5
+  inline_list:: 1, 2, 3, "test"
+  feature_flags:: # A nested dictionary for feature toggles
+    new_dashboard_enabled: true
+    user_experiment_ab: false
+    "legacy-system.compatibility_mode": true # Quoted key
+
+  # Contact information
+  contact_points::
+    - :: # List item: inline dictionary for admin
+      type: "admin"
+      email: "admin@example.com"
+      phone: null # Null value example
+    - :: # List item: multi-line dictionary for support
+      type: "support"
+      email: "support@example.com"
+      availability::
+        weekdays: "9am - 6pm"
+        weekends:: "10am - 2pm"
+
+  numerical_data::
+    integer_val: 1_234_567
+    float_val: -0.00789
+    scientific_notation_val: 6.022e23
+    hex_val: 0xCAFEBABE
+    octal_val: 0o755
+    binary_val: 0b11011001
+    empty_integer_list:: []    # test
+    empty_mapping:: {}      # Empty dictionary
+
+  # String variations
+  string_examples::
+    simple_greeting: "Hello, \"Universe\"!"
+    path_example: "C:\\Users\\Default\\Documents"
+    multiline_preserved_poem: ```
+
+      First line
+           Second
+        Third Line
+    ```
+    multiline_stripped_script: """
+          First line
+          Second line
+          Third line
+    """
