@@ -552,28 +552,35 @@ func (p *parser) parseValue() (any, error) {
 		p.pos += 3
 		return math.NaN(), nil
 
-	case (c == '+' || c == '-') && p.peekString("inf"):
-		sign := 1
-		if c == '-' {
-			sign = -1
+	case (c == '+' || c == '-'):
+		p.pos += 1
+
+		// Is the next char a digit?
+		if isDigit(p.data[p.pos]) {
+			return p.parseNumber()
 		}
 
-		p.pos += len("inf")
-		if c == '+' || c == '-' {
-			p.pos--
+		// Are the next chars "inf"?
+		if p.peekString("inf") {
+			sign := 1
+			if c == '-' {
+				sign = -1
+			}
+			p.pos += 3
+			return math.Inf(sign), nil
 		}
-		return math.Inf(sign), nil
 
 	case c == 'i' && p.peekString("inf"):
 		p.pos += 3
 		return math.Inf(1), nil
 
-	case c == '-' || c == '+' || isDigit(c):
+	case isDigit(c):
 		return p.parseNumber()
 
 	default:
 		return nil, fmt.Errorf("line %d: invalid char '%c'", p.line, c)
 	}
+	return nil, fmt.Errorf("line %d: invalid char '%c'", p.line, p.data[p.pos])
 }
 
 // parseString parses a string from the current position in the data.
