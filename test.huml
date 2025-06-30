@@ -19,7 +19,7 @@ application_config::
       type: "admin"
       email: "admin@example.com"
       phone: null # Null value example
-    - :: # List item: multi-line dictionary for support
+    - :: # 1List item: multi-line dictionary for support
       type: "support"
       email: "support@example.com"
       availability::
