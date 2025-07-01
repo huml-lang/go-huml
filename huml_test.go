@@ -74,8 +74,11 @@ func TestParsing(t *testing.T) {
 	f("key_with_comment_after_colon", "key: # comment only", true)
 
 	// Empty values.
-	f("empty_value", "key:", false)
-	f("empty_value_with_spaces", "key:   # comment", true)
+	f("empty_value", "key:", true)
+	f("empty_value", "key: ", true)
+	f("empty_value", "key:  ", true)
+	f("empty_value_with_comment", "key:# comment", true)
+	f("empty_value_with_comment", "key: # comment", true)
 
 	// Root list cases.
 	f("root_empty_list_colon", "::", true)

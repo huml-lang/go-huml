@@ -234,12 +234,7 @@ func (p *parser) parseIndicator() (string, error) {
 
 func (p *parser) parseScalarValueWithIndent(indent int) (any, error) {
 	// After single :, must have exactly one space before value
-	if p.done() || p.data[p.pos] == '\n' {
-		p.skipToNextLine()
-		return nil, nil
-	}
-
-	if p.data[p.pos] != ' ' {
+	if p.done() || p.data[p.pos] != ' ' {
 		return nil, fmt.Errorf("line %d: expected single space after ':'", p.line)
 	}
 	p.pos++
@@ -249,14 +244,14 @@ func (p *parser) parseScalarValueWithIndent(indent int) (any, error) {
 		return nil, fmt.Errorf("line %d: expected single space after ':'", p.line)
 	}
 
-	// On reaching a newline or comment, skip to the next line.
-	if p.done() || p.data[p.pos] == '\n' || p.data[p.pos] == '#' {
-		if err := p.validateLineEnding(); err != nil {
-			return nil, err
-		}
-		p.skipToNextLine()
+	// After the required space, there must be a value, not newline or EOF.
+	if p.done() || p.data[p.pos] == '\n' {
+		return nil, fmt.Errorf("line %d: expected value after ':'", p.line)
+	}
 
-		return nil, nil
+	// On reaching a comment after the space, there must be a preceding value.
+	if p.data[p.pos] == '#' {
+		return nil, fmt.Errorf("line %d: expected value after ':'", p.line)
 	}
 
 	// Check if this is a multiline string before parsing value.
