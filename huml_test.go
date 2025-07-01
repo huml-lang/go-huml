@@ -124,7 +124,7 @@ contacts::
 	f("trailing_spaces_after_value", "key: value ", true)
 	f("trailing_spaces_after_comment", "key: value # comment ", true)
 	f("trailing_spaces_on_empty_line", "key: value\n \nother: value", true)
-	// {"trailing_spaces_after_colon_no_value", "key: ", true)
+	f("trailing_spaces_after_colon_no_value", "key: ", true)
 	f("trailing_spaces_after_double_colon", "key:: ", true)
 
 	// Spacing around colons.
@@ -219,7 +219,7 @@ func TestValues(t *testing.T) {
 	f("empty_list", "list:: []", map[string]any{"list": []any{}})
 	f("empty_dict", "dict:: {}", map[string]any{"dict": map[string]any{}})
 	f("inline_list", "list:: 1, 2, 3", map[string]any{"list": []any{int64(1), int64(2), int64(3)}})
-	f("root_list", ":: 1, 2, 3, 5.6, +4, -2", []any{int64(1), int64(2), int64(3), float64(5.6), int64(4), int(-2)})
+	f("root_list", ":: 1, 2, 3, 5.6, +4, -2", []any{int64(1), int64(2), int64(3), float64(5.6), int64(4), int64(-2)})
 
 	// Test special numeric values
 	t.Run("special_numbers", func(t *testing.T) {

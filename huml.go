@@ -552,14 +552,13 @@ func (p *parser) parseValue() (any, error) {
 		return math.NaN(), nil
 
 	case (c == '+' || c == '-'):
-		p.pos += 1
-
 		// Is the next char a digit?
-		if isDigit(p.data[p.pos]) {
+		if isDigit(p.peekChar(p.pos + 1)) {
 			return p.parseNumber()
 		}
 
 		// Are the next chars "inf"?
+		p.pos += 1
 		if p.peekString("inf") {
 			sign := 1
 			if c == '-' {
@@ -925,6 +924,14 @@ func (p *parser) advance(n int) {
 func (p *parser) peekString(s string) bool {
 	end := p.pos + len(s)
 	return end <= len(p.data) && p.data[p.pos:end] == s
+}
+
+func (p *parser) peekChar(pos int) byte {
+	if len(p.data) < pos {
+		return 0
+	}
+
+	return p.data[pos]
 }
 
 func setValue(dst, src any) error {
