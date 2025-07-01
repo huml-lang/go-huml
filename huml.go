@@ -85,7 +85,7 @@ func (p *parser) parse() (any, error) {
 		return p.parseDict(0)
 	}
 
-	return p.parseValue()
+	return p.parseValue(0)
 }
 
 // parseVersion parses the optional HUML version line starting with "%HUML".
@@ -257,7 +257,7 @@ func (p *parser) parseScalarValueWithIndent(indent int) (any, error) {
 	// Check if this is a multiline string before parsing value.
 	isMultilineStr := p.peekString(`"""`) || p.peekString("```")
 
-	val, err := p.parseValue()
+	val, err := p.parseValue(indent)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +386,7 @@ func (p *parser) parseInlineVector() (any, error) {
 func (p *parser) parseInlineList() (any, error) {
 	var out []any
 	for !p.done() && p.data[p.pos] != '\n' && p.data[p.pos] != '#' {
-		val, err := p.parseValue()
+		val, err := p.parseValue(0)
 		if err != nil {
 			return nil, err
 		}
@@ -419,7 +419,7 @@ func (p *parser) parseInlineDict() (any, error) {
 		p.advance(1)
 		p.skipSpaces()
 
-		val, err := p.parseValue()
+		val, err := p.parseValue(0)
 		if err != nil {
 			return nil, err
 		}
@@ -498,7 +498,7 @@ func (p *parser) parseMultilineList(indent int) (any, error) {
 			p.pos += 2
 			val, err = p.parseVector(currIndent + 2)
 		} else {
-			val, err = p.parseValue()
+			val, err = p.parseValue(currIndent)
 			if err == nil {
 				if err := p.validateLineEnding(); err != nil {
 					return nil, err
@@ -519,7 +519,7 @@ func (p *parser) parseMultilineList(indent int) (any, error) {
 }
 
 // parseValue parses the value from the current position in the data.
-func (p *parser) parseValue() (any, error) {
+func (p *parser) parseValue(keyIndent int) (any, error) {
 	p.skipSpaces()
 	if p.done() {
 		return nil, nil
@@ -528,12 +528,12 @@ func (p *parser) parseValue() (any, error) {
 	switch c := p.data[p.pos]; {
 	case c == '"':
 		if p.peekString(`"""`) {
-			return p.parseMultilineString(0)
+			return p.parseMultilineString(keyIndent)
 		}
 		return p.parseString()
 
 	case c == '`' && p.peekString("```"):
-		return p.parseMultilineString(0)
+		return p.parseMultilineString(keyIndent)
 
 	case c == 't' && p.peekString("true"):
 		p.pos += 4
@@ -651,6 +651,7 @@ func (p *parser) parseMultilineString(keyIndent int) (string, error) {
 	reqIndent := keyIndent + 2
 	var lines []string
 	var minIndent = -1
+	closed := false
 
 	for !p.done() {
 		start := p.pos
@@ -664,7 +665,21 @@ func (p *parser) parseMultilineString(keyIndent int) (string, error) {
 			p.advance(1)
 		}
 
+		// Verify indentation for multiline strings.
 		if trim := strings.TrimSpace(line); trim == delim {
+			// The delimiter must be at the same indentation level as the key.
+			indent := 0
+			for _, r := range line {
+				if r != ' ' {
+					break
+				}
+				indent++
+			}
+			if indent != keyIndent {
+				return "", fmt.Errorf("line %d: multiline closing delimiter must be at same indentation as the key (%d spaces)", p.line, keyIndent)
+			}
+
+			closed = true
 			break
 		}
 
@@ -686,6 +701,10 @@ func (p *parser) parseMultilineString(keyIndent int) (string, error) {
 			}
 		}
 		lines = append(lines, line)
+	}
+
+	if !closed {
+		return "", fmt.Errorf("line %d: unclosed multiline string", p.line)
 	}
 
 	if !isPreserve && minIndent > 0 {

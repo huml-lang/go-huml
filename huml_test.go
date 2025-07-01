@@ -167,10 +167,12 @@ contacts::
 	f("invalid_binary_number", "key: 0b123", true)
 
 	// Multiline strings.
-	// {"unclosed_multiline_string", "key: ```\nline1\nline2", true)
-	// {"unclosed_triple_quoted_string", "key: \"\"\"\nline1\nline2", true)
+	f("unclosed_multiline_string", "key: ```\nline1\nline2", true)
+	f("unclosed_triple_quoted_string", "key: \"\"\"\nline1\nline2", true)
 	f("multiline_string_preserved_indentation", "poem: ```\n      First line\n           Second\n        Third Line\n```", false)
 	f("multiline_string_stripped_indentation", "script: \"\"\"\n          First line\n          Second line\n          Third line\n\"\"\"", false)
+	f("multiline_string_wrong_indent_backticks", "key::\n    a: ```\n      First line\n           Second\n        Third Line\n", true)
+	f("multiline_string_wrong_indent_quotes", "key::\n    b: \"\"\"\n          First line\n          Second line\n          Third line\n", true)
 
 	// List formatting.
 	f("list_item_without_dash", "list::\n  item1\n  item2", true)
@@ -193,6 +195,29 @@ contacts::
 	}
 
 	f("complex_input", string(b), false)
+
+	// Test the specific bad case mentioned in the issue
+	badMultilineCase := `key::
+    a: ` + "```" + `
+      First line
+           Second
+        Third Line
+
+    b: """
+          First line
+          Second line
+          Third line`
+
+	f("multiline_string_issue_case", badMultilineCase, true)
+
+	// Test multiline strings in list items with wrong indentation
+	badListMultilineCase := `items::
+  - ` + "```" + `
+      line1
+      line2
+`
+
+	f("multiline_string_in_list_wrong_indent", badListMultilineCase, true)
 }
 
 func TestValues(t *testing.T) {

@@ -41,7 +41,6 @@ application_config::
     simple_greeting: "Hello, \"Universe\"!"
     path_example: "C:\\Users\\Default\\Documents"
     multiline_preserved_poem: ```
-
       First line
            Second
         Third Line
