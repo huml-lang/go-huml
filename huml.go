@@ -309,12 +309,16 @@ func (p *parser) parseVector(indent int) (any, error) {
 			return nil, err
 		}
 		if p.done() {
-			return make(map[string]any), nil
+			return nil, fmt.Errorf("line %d: ambiguous empty vector after '::'. Use [] or {}.", p.line-1)
 		}
 
 		curIndent := p.getCurIndent()
 		if curIndent < indent {
-			return make(map[string]any), nil
+			if p.data[p.pos] == '-' || p.isKeyStart() {
+				return nil, fmt.Errorf("line %d: bad indent %d, expected %d", p.line, curIndent, indent)
+			}
+
+			return nil, fmt.Errorf("line %d: ambiguous empty vector after '::'. Use [] or {}.", p.line-1)
 		}
 
 		if p.data[p.pos] == '-' {
