@@ -663,6 +663,7 @@ func (p *parser) parseMultilineString(keyIndent int) (string, error) {
 
 		if !p.done() {
 			p.advance(1)
+			p.line++
 		}
 
 		// Verify indentation for multiline strings.
