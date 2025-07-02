@@ -77,15 +77,32 @@ func (p *parser) parse() (any, error) {
 		return nil, nil
 	}
 
+	var (
+		result any
+		err    error
+	)
 	if p.peekString("::") {
-		return p.parseRootList()
+		result, err = p.parseRootList()
+	} else if p.getCurIndent() == 0 && p.hasKeyValuePair() {
+		result, err = p.parseDict(0)
+	} else {
+		result, err = p.parseValue(0)
 	}
 
-	if p.getCurIndent() == 0 && p.hasKeyValuePair() {
-		return p.parseDict(0)
+	if err != nil {
+		return nil, err
 	}
 
-	return p.parseValue(0)
+	// Validate no remaining content after parsing.
+	if err := p.skipSpacesAndComments(); err != nil {
+		return nil, err
+	}
+
+	if !p.done() {
+		return nil, fmt.Errorf("line %d: unexpected content after document", p.line)
+	}
+
+	return result, nil
 }
 
 // parseVersion parses the optional HUML version line starting with "%HUML".
@@ -168,6 +185,10 @@ func (p *parser) parseDict(indent int) (any, error) {
 			return nil, fmt.Errorf("line %d: bad indent %d, expected %d", p.line, curIndent, indent)
 		}
 		if !p.isKeyStart() {
+			// Check if there's actual content that should cause an error
+			if !p.done() && p.data[p.pos] != '\n' {
+				return nil, fmt.Errorf("line %d: invalid character '%c', expected key", p.line, p.data[p.pos])
+			}
 			break
 		}
 

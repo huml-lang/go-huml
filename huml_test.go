@@ -160,6 +160,11 @@ contacts::
 	f("incomplete_escape", `key: "incomplete \"`, true)
 	f("invalid_unicode_escape", `key: "invalid \uXXXX"`, true)
 	f("incomplete_unicode_escape", `key: "incomplete \u12"`, true)
+	f("invalid_lines", "root::\n  key: \"value\"\n:something", true)
+	f("invalid_lines", "root::\n  key: \"value\"\n:bad\n  another: 123", true)
+	f("invalid_lines", "root::\n  key: \"value\"\n::something else", true)
+	f("invalid_lines", "root::\n  key: \"value\"\n :something else", true)
+	f("invalid_lines", "root::\n  key: \"value\"\n ::something else", true)
 
 	// Numbers.
 	f("invalid_hex_number", "key: 0xGHI", true)
