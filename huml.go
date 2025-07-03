@@ -61,7 +61,7 @@ func (p *parser) parse() (any, error) {
 	}
 
 	if p.done() {
-		return nil, nil
+		return map[string]any{}, nil
 	}
 
 	if p.peekString("%HUML") {
@@ -74,7 +74,7 @@ func (p *parser) parse() (any, error) {
 	}
 
 	if p.done() {
-		return nil, nil
+		return map[string]any{}, nil
 	}
 
 	var (
@@ -82,10 +82,39 @@ func (p *parser) parse() (any, error) {
 		err    error
 	)
 	if p.peekString("::") {
+		if p.getCurIndent() != 0 {
+			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
+		}
 		result, err = p.parseRootList()
+	} else if p.peekString("[]") {
+		if p.getCurIndent() != 0 {
+			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
+		}
+		p.pos += 2
+		result = []any{}
+
+		// Check line ending after [].
+		if err := p.validateLineEnding(); err != nil {
+			return nil, err
+		}
+	} else if p.peekString("{}") {
+		if p.getCurIndent() != 0 {
+			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
+		}
+		p.pos += 2
+		result = map[string]any{}
+
+		// Check line ending after {}.
+		if err := p.validateLineEnding(); err != nil {
+			return nil, err
+		}
 	} else if p.getCurIndent() == 0 && p.hasKeyValuePair() {
 		result, err = p.parseDict(0)
 	} else {
+		// Check that scalar values are at indentation 0
+		if p.getCurIndent() != 0 {
+			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
+		}
 		result, err = p.parseValue(0)
 	}
 
@@ -127,11 +156,8 @@ func (p *parser) parseRootList() (any, error) {
 		return nil, err
 	}
 
-	if list, ok := val.([]any); ok {
-		return list, nil
-	}
-
-	return p.parseMultilineList(0)
+	// parseVector returns the correct type (list or dict) based on content
+	return val, nil
 }
 
 // hasKeyValuePair checks if the current position in the data has a key-value pair.
@@ -167,7 +193,7 @@ func (p *parser) hasKeyValuePair() bool {
 
 // parseDict parses a dictionary at the given indentation level.
 func (p *parser) parseDict(indent int) (any, error) {
-	out := make(map[string]any)
+	out := map[string]any{}
 	for !p.done() {
 		if err := p.skipSpacesAndComments(); err != nil {
 			return nil, err
@@ -345,7 +371,10 @@ func (p *parser) parseVector(indent int) (any, error) {
 	}
 
 	// For inline values after ::, must have exactly one space
-	if p.pos > spacePos && p.pos-spacePos != 1 {
+	if p.pos == spacePos {
+		return nil, fmt.Errorf("line %d: expected single space after '::'", p.line)
+	}
+	if p.pos-spacePos != 1 {
 		return nil, fmt.Errorf("line %d: expected single space after '::'", p.line)
 	}
 
@@ -365,7 +394,7 @@ func (p *parser) parseInlineVector() (any, error) {
 		return []any{}, nil
 	}
 
-	// // {} is a special case indicating an empty dict.
+	// {} is a special case indicating an empty dict.
 	if p.peekString("{}") {
 		p.pos += 2
 		// Check line ending after {}
@@ -373,7 +402,7 @@ func (p *parser) parseInlineVector() (any, error) {
 			return nil, err
 		}
 		p.skipToNextLine()
-		return make(map[string]any), nil
+		return map[string]any{}, nil
 	}
 
 	// Peek ahead to determine if dict or list.
@@ -427,7 +456,7 @@ func (p *parser) parseInlineList() (any, error) {
 // parseInlineDict parses an inline dictionary where key value pairs are separated by commas.
 // Eg: dict:: key1: "value", key2: 123, key3: true
 func (p *parser) parseInlineDict() (any, error) {
-	res := make(map[string]any)
+	res := map[string]any{}
 	for !p.done() && p.data[p.pos] != '\n' && p.data[p.pos] != '#' {
 		key, err := p.parseKey()
 		if err != nil {
@@ -595,6 +624,14 @@ func (p *parser) parseValue(keyIndent int) (any, error) {
 
 	case isDigit(c):
 		return p.parseNumber()
+
+	case c == '[' && p.peekString("[]"):
+		p.pos += 2
+		return []any{}, nil
+
+	case c == '{' && p.peekString("{}"):
+		p.pos += 2
+		return map[string]any{}, nil
 
 	default:
 		return nil, fmt.Errorf("line %d: invalid char '%c'", p.line, c)
@@ -1070,13 +1107,18 @@ func stripNumUnderscores(s string) string {
 
 // Example usage and test
 func main() {
-	humlData, err := os.ReadFile("test.huml")
+	if len(os.Args) != 2 {
+		fmt.Println("Usage: huml <filename>")
+		return
+	}
+	// Read from file specified in command line
+	raw, err := os.ReadFile(os.Args[1])
 	if err != nil {
 		panic(err)
 	}
 
 	var result any
-	if err := Unmarshal([]byte(humlData), &result); err != nil {
+	if err := Unmarshal([]byte(raw), &result); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
