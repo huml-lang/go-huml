@@ -86,28 +86,6 @@ func (p *parser) parse() (any, error) {
 			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
 		}
 		result, err = p.parseRootList()
-	} else if p.peekString("[]") {
-		if p.getCurIndent() != 0 {
-			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
-		}
-		p.pos += 2
-		result = []any{}
-
-		// Check line ending after [].
-		if err := p.validateLineEnding(); err != nil {
-			return nil, err
-		}
-	} else if p.peekString("{}") {
-		if p.getCurIndent() != 0 {
-			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
-		}
-		p.pos += 2
-		result = map[string]any{}
-
-		// Check line ending after {}.
-		if err := p.validateLineEnding(); err != nil {
-			return nil, err
-		}
 	} else if p.getCurIndent() == 0 && p.hasKeyValuePair() {
 		result, err = p.parseDict(0)
 	} else {
@@ -136,7 +114,7 @@ func (p *parser) parse() (any, error) {
 
 // parseVersion parses the optional HUML version line starting with "%HUML".
 func (p *parser) parseVersion() error {
-	p.pos += len("%HUML")
+	p.advance(len("%HUML"))
 	p.skipSpaces()
 
 	// Check line ending (handles trailing spaces and comment validation).
@@ -150,7 +128,7 @@ func (p *parser) parseVersion() error {
 
 // parseRootList parses the root list starting with "::" in a key-less document.
 func (p *parser) parseRootList() (any, error) {
-	p.pos += len("::")
+	p.advance(len("::"))
 	val, err := p.parseVector(0)
 	if err != nil {
 		return nil, err
@@ -173,7 +151,7 @@ func (p *parser) hasKeyValuePair() bool {
 		p.pos++
 		for !p.done() && p.data[p.pos] != '"' {
 			if p.data[p.pos] == '\\' && p.pos+1 < len(p.data) {
-				p.pos += 2
+				p.advance(2)
 			} else {
 				p.pos++
 			}
@@ -385,7 +363,7 @@ func (p *parser) parseVector(indent int) (any, error) {
 func (p *parser) parseInlineVector() (any, error) {
 	// [] is a special case indicating an empty list.
 	if p.peekString("[]") {
-		p.pos += 2
+		p.advance(2)
 		// Check line ending after []
 		if err := p.validateLineEnding(); err != nil {
 			return nil, err
@@ -396,7 +374,7 @@ func (p *parser) parseInlineVector() (any, error) {
 
 	// {} is a special case indicating an empty dict.
 	if p.peekString("{}") {
-		p.pos += 2
+		p.advance(2)
 		// Check line ending after {}
 		if err := p.validateLineEnding(); err != nil {
 			return nil, err
@@ -545,7 +523,7 @@ func (p *parser) parseMultilineList(indent int) (any, error) {
 			err error
 		)
 		if p.peekString("::") {
-			p.pos += 2
+			p.advance(2)
 			val, err = p.parseVector(currIndent + 2)
 		} else {
 			val, err = p.parseValue(currIndent)
@@ -586,19 +564,19 @@ func (p *parser) parseValue(keyIndent int) (any, error) {
 		return p.parseMultilineString(keyIndent)
 
 	case c == 't' && p.peekString("true"):
-		p.pos += 4
+		p.advance(4)
 		return true, nil
 
 	case c == 'f' && p.peekString("false"):
-		p.pos += 5
+		p.advance(5)
 		return false, nil
 
 	case c == 'n' && p.peekString("null"):
-		p.pos += 4
+		p.advance(4)
 		return nil, nil
 
 	case c == 'n' && p.peekString("nan"):
-		p.pos += 3
+		p.advance(3)
 		return math.NaN(), nil
 
 	case (c == '+' || c == '-'):
@@ -608,34 +586,35 @@ func (p *parser) parseValue(keyIndent int) (any, error) {
 		}
 
 		// Are the next chars "inf"?
-		p.pos += 1
+		p.advance(1)
 		if p.peekString("inf") {
 			sign := 1
 			if c == '-' {
 				sign = -1
 			}
-			p.pos += 3
+			p.advance(3)
 			return math.Inf(sign), nil
 		}
 
 	case c == 'i' && p.peekString("inf"):
-		p.pos += 3
+		p.advance(3)
 		return math.Inf(1), nil
 
 	case isDigit(c):
 		return p.parseNumber()
 
 	case c == '[' && p.peekString("[]"):
-		p.pos += 2
+		p.advance(2)
 		return []any{}, nil
 
 	case c == '{' && p.peekString("{}"):
-		p.pos += 2
+		p.advance(2)
 		return map[string]any{}, nil
 
 	default:
 		return nil, fmt.Errorf("line %d: invalid char '%c'", p.line, c)
 	}
+
 	return nil, fmt.Errorf("line %d: invalid char '%c'", p.line, p.data[p.pos])
 }
 
@@ -678,7 +657,7 @@ func (p *parser) parseString() (string, error) {
 					return "", fmt.Errorf("line %d: invalid unicode: %s", p.line, hex)
 				}
 				b.WriteRune(rune(code))
-				p.pos += 4
+				p.advance(4)
 			default:
 				return "", fmt.Errorf("line %d: invalid escape '\\%c'", p.line, e)
 			}
@@ -698,7 +677,7 @@ func (p *parser) parseMultilineString(keyIndent int) (string, error) {
 	isPreserve := delim == "```"
 
 	// Advance past the indicator.
-	p.pos += 3
+	p.advance(3)
 
 	// Validate line ending after delimiter.
 	if err := p.validateLineEnding(); err != nil {
@@ -827,7 +806,7 @@ loop:
 
 // parseBase parses a number in a specific base (2, 8, or 16) with an optional prefix.
 func (p *parser) parseBase(start int, base int, prefix string) (int64, error) {
-	p.pos += len(prefix)
+	p.advance(len(prefix))
 	for !p.done() {
 		c := p.data[p.pos]
 		if (base == 16 && !isHex(c)) || (base == 8 && !(c >= '0' && c <= '7')) || (base == 2 && !(c == '0' || c == '1')) {
