@@ -603,14 +603,6 @@ func (p *parser) parseValue(keyIndent int) (any, error) {
 	case isDigit(c):
 		return p.parseNumber()
 
-	case c == '[' && p.peekString("[]"):
-		p.advance(2)
-		return []any{}, nil
-
-	case c == '{' && p.peekString("{}"):
-		p.advance(2)
-		return map[string]any{}, nil
-
 	default:
 		return nil, fmt.Errorf("line %d: invalid char '%c'", p.line, c)
 	}

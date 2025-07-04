@@ -89,8 +89,6 @@ func TestParsing(t *testing.T) {
 	f("root_multiline_unquoted_values", "::\n  - item1\n  - item2", true)
 	f("root_multiline_bad_indentation", "::\n - item1\n  - item2", true)
 
-	f("root_list", "\n\n[]\n\n", false)
-	f("root_dict", "\n{}", false)
 	f("root_list", ":: []", false)
 	f("root_dict", ":: {}", false)
 	f("root_dict_comment", "# test\n:: {}", false)
@@ -99,6 +97,8 @@ func TestParsing(t *testing.T) {
 	f("root_scalar", "\n\"test\"", false)
 
 	f("root_invalid", " ::", true)
+	f("root_invalid_list", "\n\n[]\n\n", true)
+	f("root_invalid_dict", "\n{}", true)
 	f("root_invalid_list", "   []", true)
 	f("root_invalid_dict", "   {}", true)
 	f("root_invalid_list", "  ::[]", true)
