@@ -2,7 +2,9 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"math"
+	"os"
 	"reflect"
 	"testing"
 )
@@ -478,4 +480,36 @@ func FuzzParsing(f *testing.F) {
 		var result any
 		_ = Unmarshal([]byte(input), &result)
 	})
+}
+
+func BenchmarkParseHUML(b *testing.B) {
+	f, err := os.ReadFile("test.huml")
+	if err != nil {
+		b.Fatalf("failed to read test.huml: %v", err)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for b.Loop() {
+		var result any
+		if err := Unmarshal(f, &result); err != nil {
+			b.Fatalf("unexpected error: %v", err)
+		}
+	}
+}
+
+func BenchmarkParseJSON(b *testing.B) {
+	f, err := os.ReadFile("test.json")
+	if err != nil {
+		b.Fatalf("failed to read test.json: %v", err)
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		var result any
+		if err := json.Unmarshal(f, &result); err != nil {
+			b.Fatalf("unexpected error: %v", err)
+		}
+	}
 }
