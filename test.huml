@@ -1,5 +1,5 @@
 # Kitchensink test file.
-foo_root:: # Hello
+foo_one:: # Hello
   # Scalar values testing - basic types
   foo_string: "bar_value"
   bar_string: "baz with spaces"
@@ -39,6 +39,7 @@ foo_root:: # Hello
     grault_newlines: "Line1\nLine2\tTabbed"
     garply_long: "This is a very long string that contains many words and might test the parser's ability to handle extended content without issues"
 
+foo_two:: # Yet another section.
   # Inline collections
   foo_inline_list:: 1, 2, 3, 4, 5
   bar_inline_list:: "alpha", "beta", "gamma"
@@ -122,6 +123,7 @@ foo_root:: # Hello
   # Full line comment
   quux_comments: "value"
 
+foo_three::
   # Multiline strings
   foo_multiline_preserved: ```
     Preserved formatting
@@ -200,6 +202,7 @@ Line back to no indent
   foo_large_inline:: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, "eleven", "twelve", true, false, null, 3.14
   bar_large_inline:: a: 1, b: 2, c: 3, d: 4, e: 5, f: "six", g: true, h: null
 
+foo_final::
   # Final complex test structure
   foo_final_test::
     bar_everything::

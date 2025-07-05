@@ -7,6 +7,8 @@ import (
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -482,6 +484,33 @@ func FuzzParsing(f *testing.F) {
 	})
 }
 
+// TestDeepEqual reads test.huml and test.json, unmarshals them, and compares the results.
+func TestDeepEqual(t *testing.T) {
+	// Read test.huml and unmarshal it.
+	var resHuml map[string]any
+	b, err := os.ReadFile("test.huml")
+	if err != nil {
+		t.Fatalf("failed to read test.huml: %v", err)
+	}
+	if err := Unmarshal(b, &resHuml); err != nil {
+		t.Fatalf("failed to unmarshal test.huml: %v", err)
+	}
+	out := normalizeToJSON(resHuml)
+
+	// Read test.json and unmarshal it.
+	var resJson map[string]any
+	b, err = os.ReadFile("test.json")
+	if err != nil {
+		t.Fatalf("failed to read test.json: %v", err)
+	}
+	if err := json.Unmarshal(b, &resJson); err != nil {
+		t.Fatalf("failed to unmarshal test.json: %v", err)
+	}
+
+	// Deep-compare both.
+	assert.Equal(t, out, resJson, "test.huml and test.json should be deeply equal")
+}
+
 func BenchmarkParseHUML(b *testing.B) {
 	f, err := os.ReadFile("test.huml")
 	if err != nil {
@@ -511,5 +540,31 @@ func BenchmarkParseJSON(b *testing.B) {
 		if err := json.Unmarshal(f, &result); err != nil {
 			b.Fatalf("unexpected error: %v", err)
 		}
+	}
+}
+
+// json lib uses float64 for all numbers. Convert all numbers to the same type
+// in the HUML-parsed structure to make a deep-comparison with the JSON structure possible.
+func normalizeToJSON(data any) any {
+	switch v := data.(type) {
+	case map[string]any:
+		result := make(map[string]any)
+		for key, val := range v {
+			result[key] = normalizeToJSON(val)
+		}
+		return result
+
+	case []any:
+		result := make([]any, len(v))
+		for i, val := range v {
+			result[i] = normalizeToJSON(val)
+		}
+		return result
+
+	case int64:
+		return float64(v)
+
+	default:
+		return v
 	}
 }

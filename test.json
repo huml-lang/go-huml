@@ -1,0 +1,310 @@
+{
+  "foo_final": {
+    "foo_final_test": {
+      "bar_everything": [
+        {
+          "bool_val": true,
+          "float_val": 3.14,
+          "inline_dict": {
+            "key": "value",
+            "num": 123
+          },
+          "inline_list": [
+            1,
+            "two",
+            3,
+            true,
+            null
+          ],
+          "int_val": 42,
+          "nested_dict": {
+            "deep_key": "deep_value",
+            "deep_list": [
+              "item1",
+              {
+                "nested": "item"
+              },
+              "item3"
+            ]
+          },
+          "null_val": null,
+          "string_val": "test"
+        },
+        "simple_string_item",
+        999,
+        {
+          "final_nested": {
+            "ultimate_test": {
+              "complete": "yes",
+              "success": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  "foo_one": {
+    "bar_string": "baz with spaces",
+    "baz_int": 42,
+    "corge_bool": false,
+    "foo_floats": {
+      "bar_simple": 123.456,
+      "baz_negative": -78.9,
+      "corge_zero": 0,
+      "garply_large_exp": 6.022e+23,
+      "grault_precision": 0.123456789,
+      "quux_scientific_neg": -4.56e-7,
+      "qux_scientific": 12300000000
+    },
+    "foo_integers": {
+      "bar_positive": 1234567,
+      "baz_negative": -987654,
+      "corge_hex": 3735928559,
+      "garply_binary": 85,
+      "grault_octal": 511,
+      "quux_underscore": 1000000,
+      "qux_zero": 0,
+      "waldo_large": 9223372036854775807
+    },
+    "foo_string": "bar_value",
+    "foo_strings": {
+      "bar_empty": "",
+      "baz_spaces": "   spaces   ",
+      "corge_unicode": "Unicode: αβγδε 中文 🚀",
+      "garply_long": "This is a very long string that contains many words and might test the parser's ability to handle extended content without issues",
+      "grault_newlines": "Line1\nLine2\tTabbed",
+      "quux_path": "C:\\path\\to\\file.txt",
+      "qux_escaped": "Hello \"World\" with 'quotes'"
+    },
+    "grault_null": null,
+    "quux_bool": true,
+    "qux_float": 3.14159
+  },
+  "foo_three": {
+    "bar_large_inline": {
+      "a": 1,
+      "b": 2,
+      "c": 3,
+      "d": 4,
+      "e": 5,
+      "f": "six",
+      "g": true,
+      "h": null
+    },
+    "bar_multiline_stripped": "Stripped formatting\nThis will be normalized\nAll leading whitespace removed\nConsistent indentation\nFinal line",
+    "baz_multiline_edge": "Line with no indent\nLine with indent\nLine back to no indent",
+    "foo_booleans": {
+      "bar_true": true,
+      "baz_false": false,
+      "corge_True": true,
+      "grault_False": false,
+      "quux_FALSE": false,
+      "qux_TRUE": true
+    },
+    "foo_complex_nesting": {
+      "bar_level1": {
+        "baz_level2": {
+          "qux_level3": {
+            "quux_level4": {
+              "corge_deep_value": "very_deep",
+              "garply_deep_inline": {
+                "deep": "inline",
+                "dict": true
+              },
+              "grault_deep_list": [
+                "deep_item1",
+                {
+                  "deep_dict_key": "deep_dict_value",
+                  "deep_dict_list": [
+                    "nested",
+                    "in",
+                    "deep",
+                    "dict"
+                  ]
+                },
+                "deep_item3"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "foo_edge_cases": {
+      "": "empty_key",
+      " ": "space_key",
+      "  ": "double_space_key",
+      "123": "numeric_string_key",
+      "key_with_empty_value": "",
+      "key_with_space_value": " ",
+      "null": "null_string_key",
+      "true": "boolean_string_key"
+    },
+    "foo_large_inline": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      "eleven",
+      "twelve",
+      true,
+      false,
+      null,
+      3.14
+    ],
+    "foo_mixed_structure": {
+      "bar_inline_in_multi": {
+        "quick": "inline"
+      },
+      "baz_multi_list": [
+        "first",
+        {
+          "inline": "dict"
+        },
+        {
+          "another_key": 123,
+          "multiline_key": "multiline_value"
+        }
+      ]
+    },
+    "foo_multiline_preserved": "Preserved formatting\n  With different indentation\n    And multiple levels\n  Back to level two\nBack to level one",
+    "foo_nulls": {
+      "bar_null": null,
+      "baz_NULL": null,
+      "qux_Null": null
+    }
+  },
+  "foo_two": {
+    "bar_comments": "value",
+    "bar_empty_dict": {},
+    "bar_inline_list": [
+      "alpha",
+      "beta",
+      "gamma"
+    ],
+    "bar_mixed_list": [
+      "string_value",
+      123,
+      {
+        "nested_baz": 456,
+        "nested_foo": "nested_bar"
+      },
+      {
+        "in": "list",
+        "inline": "dict"
+      },
+      {
+        "deep_nested": {
+          "level_two": {
+            "level_three": "deep_value"
+          }
+        }
+      }
+    ],
+    "baz_comments": "value",
+    "baz_empty_spaced": [],
+    "baz_inline_list": [
+      true,
+      false,
+      null,
+      42
+    ],
+    "corge_inline_dict": {
+      "nested": "deep_value",
+      "simple": "test"
+    },
+    "foo_comments": "value",
+    "foo_complex_list": [
+      {
+        "bar_type": "first",
+        "baz_value": 100,
+        "qux_flag": true
+      },
+      {
+        "bar_type": "second",
+        "baz_value": 200,
+        "qux_nested": {
+          "corge_list": [
+            "a",
+            "b",
+            "c"
+          ],
+          "quux_inner": "inner_value"
+        }
+      },
+      {
+        "bar_type": "third",
+        "baz_empty": {},
+        "qux_null": null
+      },
+      {
+        "bar": null,
+        "foo": 42,
+        "inline_dict": "in_list"
+      }
+    ],
+    "foo_dict": {
+      "bar_key": "bar_value",
+      "baz_key": 789,
+      "qux_nested": {
+        "corge_sub": true,
+        "grault_deep": {
+          "garply_deeper": "deepest_value",
+          "waldo_numbers": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "quux_sub": "quux_value"
+      }
+    },
+    "foo_empty_list": [],
+    "foo_inline_list": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "foo_list": [
+      "first_item",
+      "second_item",
+      "third_item",
+      null,
+      42,
+      true,
+      false
+    ],
+    "foo_special_keys": {
+      "123numeric_start": "numeric_key",
+      "key with spaces": "spaced_value",
+      "key-with-dashes": "dashed_value",
+      "key.with.dots": "dotted_value",
+      "key_with_underscores": "underscore_value",
+      "quoted-key": "quoted_value",
+      "special!@#$%": "special_chars"
+    },
+    "quux_comments": "value",
+    "quux_inline_dict": {
+      "baz": 123,
+      "foo": "bar",
+      "qux": true
+    },
+    "qux_comments": "value",
+    "qux_empty_spaced": {},
+    "qux_inline_list": [
+      1,
+      "mixed",
+      true,
+      null,
+      3.14
+    ]
+  }
+}
