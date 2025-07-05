@@ -32,6 +32,14 @@ func TestParsing(t *testing.T) {
 	f("whitespace_only", "   \n  \n  ", true)
 	f("comments_only", "# comment\n# another comment", false)
 	f("version_directive_with_comment", "%HUML 1.0 # version comment", true)
+	f("duplicate_key_error", "key: 1\nkey: 2", true)
+	f("invalid_char_after_plus", "key: +abc", true)
+	f("invalid_char_after_minus", "key: -abc", true)
+	f("string_with_newline", "key: \"line1\nline2\"", true)
+	f("trailing_spaces_eof", "key: value   ", true)
+	f("comment_trailing_spaces", "# comment ", true)
+	f("blank_line_trailing_spaces", "key: value\n ", true)
+	f("space_before_comma", "key:: a: 1 , b: 2", true)
 
 	// Basic scalar values.
 	f("unquoted_string", "key: value", true)
@@ -95,6 +103,9 @@ func TestParsing(t *testing.T) {
 	f("root_scalar", "123", false)
 	f("root_scalar", "", false)
 	f("root_scalar", "\n\"test\"", false)
+	f("root_scalar_with_extra_content", "123\nextra content", true)
+	f("root_scalar_with_comment_extra", "\"test\" # comment\nextra", true)
+	f("root_scalar_blank_then_extra", "true\n\nextra content", true)
 
 	f("root_invalid", " ::", true)
 	f("root_invalid_list", "\n\n[]\n\n", true)
@@ -112,8 +123,19 @@ func TestParsing(t *testing.T) {
 	f("simple_dict", "dict::\n  key1: \"value1\"\n  key2: \"value2\"", false)
 	f("simple_dict_unquoted_values", `dict::\n  key1: value1\n  key2: value2`, true)
 	f("nested_dict", "outer::\n  inner::\n    key: 123", false)
+	f("dict_invalid_char_start", "dict::\n  @invalid: value", true)
+	f("dict_value_parse_error", "dict::\n  key: +", true)
 	f("empty_dict", "dict:: {}", false)
+	f("ambiguous_empty_vector_space", "key:: # comment", true)
 	f("inline_dict", `dict:: key1: "value1", key2: "value2"`, false)
+	f("inline_vector_empty_list_error", "key:: []trailing", true)
+	f("inline_vector_empty_dict_error", "key:: {}trailing", true)
+	f("inline_list_comma_error", "key:: 1 2", true)
+	f("inline_dict_comma_error", "key:: a: 1 b: 2", true)
+	f("inline_dict_missing_colon", "key:: a b", true)
+	f("inline_dict_no_space_after_colon", "key:: a:1", true)
+	f("inline_dict_value_parse_error", "key:: a: +", true)
+	f("inline_dict_trailing_comma_error", "key:: a: 1,trailing", true)
 
 	// List cases.
 	f("simple_list", "list::\n  - \"item1\"\n  - \"item2\"", false)
@@ -121,6 +143,9 @@ func TestParsing(t *testing.T) {
 	f("empty_list", "list:: []", false)
 	f("inline_list", "list:: 1, 2, 3, 4", false)
 	f("mixed_inline_list", `list:: 1, "string", true, null`, false)
+	f("list_no_space_after_dash", "list::\n  -item", true)
+	f("list_bad_indent_item", "list::\n    - item", true)
+	f("list_not_list_continuation", "list::\n  - item1\n  \"key\": \"value\"", true)
 
 	// List with dicts.
 	f("list_with_inline_dicts", `
@@ -170,6 +195,9 @@ contacts::
 	f("comment_without_space_before", "key: value#comment", true)
 	f("comment_without_space_after_hash", "key: value #comment", true)
 	f("comment_line_without_space_after_hash", "#comment", true)
+	f("comment_no_space_before_value", "key:\"value\"# comment", true)
+	f("comment_hash_no_space", "key: \"value\"#comment", true)
+	f("comment_hash_no_following_space", "key: \"value\" #comment", true)
 	f("double_colon_followed_by_comment_no_space", "key::#comment", true)
 
 	// Indentation.
@@ -204,6 +232,9 @@ contacts::
 	f("multiline_string_stripped_indentation", "script: \"\"\"\n          First line\n          Second line\n          Third line\n\"\"\"", false)
 	f("multiline_string_wrong_indent_backticks", "key::\n    a: ```\n      First line\n           Second\n        Third Line\n", true)
 	f("multiline_string_wrong_indent_quotes", "key::\n    b: \"\"\"\n          First line\n          Second line\n          Third line\n", true)
+	f("multiline_string_delimiter_without_newline", "key: ```content```", true)
+	f("multiline_wrong_closing_indent", "key: ```\n  content\n    ```", true)
+	f("multiline_invalid_after_delimiter", "key: ```\n  content\n``` extra", true)
 
 	// List formatting.
 	f("list_item_without_dash", "list::\n  item1\n  item2", true)
@@ -296,6 +327,42 @@ func TestValues(t *testing.T) {
 			t.Error("Expected -Inf")
 		}
 	})
+}
+
+// TestSetValueErrors tests error conditions in setValue function
+func TestSetValue(t *testing.T) {
+	f := func(name string, dst any, val any, errExpected bool, expectedVal any) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			t.Helper()
+			err := setValue(dst, val)
+			if errExpected {
+				if err == nil {
+					t.Error("expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if dst != nil && !errExpected {
+					switch v := dst.(type) {
+					case *any:
+						if *v != expectedVal {
+							t.Errorf("expected %v, got %v", expectedVal, *v)
+						}
+					}
+				}
+			}
+		})
+	}
+
+	var s *string
+	f("nil_destination", nil, "test", true, nil)
+	f("non_pointer_destination", "", "test", true, nil)
+	f("nil_pointer_destination", s, "test", true, nil)
+	f("incompatible_types", new(int), "string_value", true, nil)
+	f("interface_assignment", new(any), "test", false, "test")
+	f("interface_nil_assignment", new(any), nil, false, nil)
 }
 
 func FuzzParsing(f *testing.F) {
