@@ -326,7 +326,20 @@ func (p *parser) parseInlineList() (any, error) {
 		}
 
 		out = append(out, val)
-		p.skipSpaces() // Skips space after value, before comma or EOL.
+
+		// Only skip spaces if there might be a comma following.
+		if !p.done() && p.data[p.pos] == ' ' {
+			nextPos := p.pos + 1
+			for nextPos < len(p.data) && p.data[nextPos] == ' ' {
+				nextPos++
+			}
+			if nextPos < len(p.data) && p.data[nextPos] == ',' {
+				p.skipSpaces()
+			} else {
+				// Don't consume spaces if they're trailing spaces at end of line.
+				break
+			}
+		}
 	}
 
 	if err := p.consumeLine(); err != nil {
@@ -367,7 +380,20 @@ func (p *parser) parseInlineDict() (any, error) {
 		}
 
 		res[key] = val
-		p.skipSpaces()
+
+		// Only skip spaces if there might be a comma following
+		if !p.done() && p.data[p.pos] == ' ' {
+			nextPos := p.pos + 1
+			for nextPos < len(p.data) && p.data[nextPos] == ' ' {
+				nextPos++
+			}
+			if nextPos < len(p.data) && p.data[nextPos] == ',' {
+				p.skipSpaces()
+			} else {
+				// Don't consume spaces if they're trailing spaces at end of line
+				break
+			}
+		}
 	}
 
 	if err := p.consumeLine(); err != nil {
@@ -682,13 +708,29 @@ func (p *parser) parseBase(start, base int, prefix string) (int64, error) {
 // skipBlankLines consumes empty lines and comment-only lines, validating them.
 func (p *parser) skipBlankLines() error {
 	for !p.done() {
+		lineStart := p.pos
 		p.skipSpaces()
-		if p.done() || (p.data[p.pos] != '\n' && p.data[p.pos] != '#') {
-			// Found content, stop.
+		if p.done() {
+			// We're at end of input after consuming spaces.
+			// This is only valid if there were no spaces to consume (empty input).
+			if p.pos > lineStart {
+				return p.errorf("trailing spaces are not allowed")
+			}
 			return nil
 		}
 
-		// Consume the blank or comment-only line.
+		if p.data[p.pos] != '\n' && p.data[p.pos] != '#' {
+			// Found non-blank content, stop.
+			return nil
+		}
+
+		// Check for trailing spaces on blank lines
+		if p.data[p.pos] == '\n' && p.pos > lineStart {
+			return p.errorf("trailing spaces are not allowed")
+		}
+
+		// Reset position and consume the blank or comment-only line.
+		p.pos = lineStart
 		if err := p.consumeLine(); err != nil {
 			return err
 		}

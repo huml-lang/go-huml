@@ -145,6 +145,13 @@ contacts::
 	f("trailing_spaces_on_empty_line", "key: value\n \nother: value", true)
 	f("trailing_spaces_after_colon_no_value", "key: ", true)
 	f("trailing_spaces_after_double_colon", "key:: ", true)
+	f("trailing_spaces_after_inline_dict", "key:: foo: 1, bar: \"two\" ", true)
+	f("trailing_spaces_after_inline_dict", "key:: foo: 1, bar: \"two\"   ", true)
+	f("trailing_spaces_after_inline_dict", "key:: foo: 1, bar: \"two\", baz: true   ", true)
+	f("trailing_spaces_after_inline_list", "key:: 1, 2, true, \"two\"  ", true)
+	f("trailing_spaces_after_inline_list", "key:: 1, 2, true, \"two\" ", true)
+	f("trailing_spaces_after_inline_list", "key:: 1, 2, true, \"two\"   ", true)
+	f("trailing_spaces_after_inline_list", "key:: 1, 2, true, \"two\", true   ", true)
 
 	// Spacing around colons.
 	f("no_space_after_colon", "key:value", true)
