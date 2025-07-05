@@ -14,7 +14,7 @@ import (
 
 // parser holds the state of the parsing process.
 type parser struct {
-	data string // The input HUML string.
+	data []byte // The input HUML data.
 	pos  int    // The current position in the data.
 	line int    // The current line number, for error reporting.
 }
@@ -27,7 +27,7 @@ func Unmarshal(data []byte, v any) error {
 		return setValue(v, map[string]any{})
 	}
 
-	p := &parser{data: string(data), line: 1}
+	p := &parser{data: data, line: 1}
 
 	// Parse the document. The result can be any valid HUML type.
 	out, err := p.parseDocument()
@@ -418,7 +418,7 @@ func (p *parser) parseKey() (string, error) {
 		return "", p.errorf("expected a key")
 	}
 
-	return p.data[start:p.pos], nil
+	return string(p.data[start:p.pos]), nil
 }
 
 // parseIndicator parses the ':' or '::' after a key.
@@ -536,9 +536,9 @@ func (p *parser) parseString() (string, error) {
 					return "", p.errorf("incomplete unicode escape sequence \\u")
 				}
 				hex := p.data[p.pos+1 : p.pos+5]
-				code, err := strconv.ParseUint(hex, 16, 32)
+				code, err := strconv.ParseUint(string(hex), 16, 32)
 				if err != nil {
-					return "", p.errorf("invalid unicode escape sequence \\u%s", hex)
+					return "", p.errorf("invalid unicode escape sequence \\u%s", string(hex))
 				}
 				b.WriteRune(rune(code))
 
@@ -560,7 +560,7 @@ func (p *parser) parseString() (string, error) {
 
 // parseMultilineString parses ```` (preserve space) or `"""` (strip space) strings.
 func (p *parser) parseMultilineString(keyIndent int, preserveSpaces bool) (string, error) {
-	delim := p.data[p.pos : p.pos+3]
+	delim := string(p.data[p.pos : p.pos+3])
 	p.advance(3)
 
 	// Delimiter must be followed by a newline or valid comment.
@@ -656,7 +656,7 @@ loop:
 	}
 
 	// Replace any underscores in the number string.
-	numStr := strings.ReplaceAll(p.data[start:p.pos], "_", "")
+	numStr := strings.ReplaceAll(string(p.data[start:p.pos]), "_", "")
 	if isFloat {
 		return strconv.ParseFloat(numStr, 64)
 	}
@@ -693,7 +693,7 @@ func (p *parser) parseBase(start, base int, prefix string) (int64, error) {
 		sign = string(p.data[start])
 	}
 
-	numStr := strings.ReplaceAll(p.data[numStart:p.pos], "_", "")
+	numStr := strings.ReplaceAll(string(p.data[numStart:p.pos]), "_", "")
 	val, err := strconv.ParseInt(numStr, base, 64)
 	if err != nil {
 		return 0, p.errorf("invalid number: %v", err)
@@ -796,7 +796,7 @@ func (p *parser) consumeLineContent() string {
 		p.line++
 	}
 
-	return content
+	return string(content)
 }
 
 // expectSpace consumes exactly one space and returns an error if not found.
@@ -903,17 +903,6 @@ func (p *parser) skipSpaces() {
 	}
 }
 
-func (p *parser) peekString(s string) bool {
-	return strings.HasPrefix(p.data[p.pos:], s)
-}
-
-func (p *parser) peekChar(pos int) byte {
-	if pos >= len(p.data) || pos < 0 {
-		return 0
-	}
-	return p.data[pos]
-}
-
 func setValue(dst, src any) error {
 	if dst == nil {
 		return errors.New("cannot unmarshal into a nil value")
@@ -968,6 +957,25 @@ func isHex(c byte) bool {
 
 func isSpaceString(s string) bool {
 	return strings.TrimSpace(s) == ""
+}
+
+func (p *parser) peekString(s string) bool {
+	if p.pos+len(s) > len(p.data) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if p.data[p.pos+i] != s[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *parser) peekChar(pos int) byte {
+	if pos >= len(p.data) || pos < 0 {
+		return 0
+	}
+	return p.data[pos]
 }
 
 func main() {
