@@ -1,5 +1,5 @@
 # Kitchensink test file.
-foo_root::
+foo_root:: # Hello
   # Scalar values testing - basic types
   foo_string: "bar_value"
   bar_string: "baz with spaces"

@@ -7,202 +7,138 @@ import (
 	"log"
 	"math"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 )
 
+// parser holds the state of the parsing process.
 type parser struct {
-	data string
-	pos  int
-	line int
+	data string // The input HUML string.
+	pos  int    // The current position in the data.
+	line int    // The current line number, for error reporting.
 }
 
 // Unmarshal parses HUML data and stores the result in the value pointed to by v.
-// If v is nil or not a pointer, it returns an error.
-//
-// It converts HUML data into Go values with the following mappings:
-//
-//   - HUML scalars (key: value) become Go primitive types:
-//   - strings for quoted strings and multiline strings
-//   - int64 for integers
-//   - float64 for floating point numbers
-//   - bool for true/false
-//   - nil for null
-//   - math.NaN() for nan
-//   - math.Inf() for inf/+inf/-inf
-//   - HUML vectors (key:: value) become:
-//   - []any for lists
-//   - map[string]any for dictionaries
-//   - HUML documents become map[string]any or []any depending on structure
-//
-// To unmarshal HUML into an interface value, it stores one of:
-// bool, int64, float64, string, []any, map[string]any, or nil.
-//
-// HUML supports inline and multiline formats for both lists and dictionaries.
-// Multiline strings can use """ (with leading space trimming) or ``` (preserving spaces).
-// Numbers support underscores for readability and various bases (0x, 0o, 0b).
-//
-// If the data contains a syntax error, a parser error is returned with line number.
+// It is the main entry point for the HUML parser.
 func Unmarshal(data []byte, v any) error {
+	// A completely empty document is a valid empty dict.
+	if len(data) == 0 {
+		return setValue(v, map[string]any{})
+	}
+
 	p := &parser{data: string(data), line: 1}
 
-	out, err := p.parse()
+	// Parse the document. The result can be any valid HUML type.
+	out, err := p.parseDocument()
 	if err != nil {
 		return err
 	}
 
+	// The parsed Go value is assigned to the user-provided variable.
 	return setValue(v, out)
 }
 
-// parse parses the entire HUML document and returns the value.
-func (p *parser) parse() (any, error) {
-	if err := p.skipSpacesAndComments(); err != nil {
-		return nil, err
-	}
+// errorf creates a new error with the current line number.
+// This is a helper to consistently format error messages.
+func (p *parser) errorf(format string, args ...any) error {
+	return fmt.Errorf("line %d: "+format, append([]any{p.line}, args...)...)
+}
 
-	if p.done() {
-		return map[string]any{}, nil
-	}
-
+// parseDocument is the top-level parsing function for a HUML document.
+func (p *parser) parseDocument() (any, error) {
+	// A document can begin with a version declaration.
 	if p.peekString("%HUML") {
-		if err := p.parseVersion(); err != nil {
-			return nil, err
-		}
-		if err := p.skipSpacesAndComments(); err != nil {
+		p.advance(len("%HUML"))
+		// The rest of the version line is ignored, but must be well-formed.
+		if err := p.consumeLine(); err != nil {
 			return nil, err
 		}
 	}
 
+	// Skip any blank lines or comments at the start of the content.
+	if err := p.skipBlankLines(); err != nil {
+		return nil, err
+	}
+
+	// If the document is empty or only contains comments, it's an empty dict.
 	if p.done() {
 		return map[string]any{}, nil
 	}
 
-	var (
-		result any
-		err    error
-	)
-	if p.peekString("::") {
-		if p.getCurIndent() != 0 {
-			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
-		}
-		result, err = p.parseRootList()
-	} else if p.getCurIndent() == 0 && p.hasKeyValuePair() {
-		result, err = p.parseDict(0)
-	} else {
-		// Check that scalar values are at indentation 0
-		if p.getCurIndent() != 0 {
-			return nil, fmt.Errorf("line %d: invalid preceding spaces", p.line)
-		}
-		result, err = p.parseValue(0)
+	// All root content must start at column 0.
+	if p.getCurIndent() != 0 {
+		return nil, p.errorf("root element must not be indented")
 	}
 
-	if err != nil {
-		return nil, err
-	}
-
-	// Validate no remaining content after parsing.
-	if err := p.skipSpacesAndComments(); err != nil {
-		return nil, err
-	}
-
-	if !p.done() {
-		return nil, fmt.Errorf("line %d: unexpected content after document", p.line)
-	}
-
-	return result, nil
-}
-
-// parseVersion parses the optional HUML version line starting with "%HUML".
-func (p *parser) parseVersion() error {
-	p.advance(len("%HUML"))
-	p.skipSpaces()
-
-	// Check line ending (handles trailing spaces and comment validation).
-	if err := p.validateLineEnding(); err != nil {
-		return err
-	}
-
-	p.skipToNextLine()
-	return nil
-}
-
-// parseRootList parses the root list starting with "::" in a key-less document.
-func (p *parser) parseRootList() (any, error) {
-	p.advance(len("::"))
-	val, err := p.parseVector(0)
-	if err != nil {
-		return nil, err
-	}
-
-	// parseVector returns the correct type (list or dict) based on content
-	return val, nil
-}
-
-// hasKeyValuePair checks if the current position in the data has a key-value pair.
-func (p *parser) hasKeyValuePair() bool {
-	last := p.pos
-	defer func() { p.pos = last }()
-
-	if !p.isKeyStart() {
-		return false
-	}
-
-	if p.data[p.pos] == '"' {
-		p.pos++
-		for !p.done() && p.data[p.pos] != '"' {
-			if p.data[p.pos] == '\\' && p.pos+1 < len(p.data) {
-				p.advance(2)
-			} else {
-				p.pos++
-			}
+	// A document can be a root list, a dict, or a single scalar value.
+	switch {
+	case p.peekString("::"):
+		// A key-less document starting with `::` is a root list or dict.
+		p.advance(len("::"))
+		return p.parseVector(0)
+	case p.hasKeyValuePair():
+		// The document is a standard dict.
+		return p.parseDict(0)
+	default:
+		// The document is a single scalar value.
+		val, err := p.parseValue(0)
+		if err != nil {
+			return nil, err
 		}
 
+		// Ensure no other content follows the scalar.
+		if err := p.consumeLine(); err != nil {
+			return nil, err
+		}
+		if err := p.skipBlankLines(); err != nil {
+			return nil, err
+		}
 		if !p.done() {
-			p.pos++
+			return nil, p.errorf("unexpected content after root scalar value")
 		}
-	} else {
-		for !p.done() && (isAlphaNum(p.data[p.pos]) || p.data[p.pos] == '-' || p.data[p.pos] == '_') {
-			p.pos++
-		}
-	}
 
-	return !p.done() && p.data[p.pos] == ':'
+		return val, nil
+	}
 }
 
-// parseDict parses a dictionary at the given indentation level.
+// parseDict parses a multi-line dict at a given indentation level.
 func (p *parser) parseDict(indent int) (any, error) {
 	out := map[string]any{}
-	for !p.done() {
-		if err := p.skipSpacesAndComments(); err != nil {
+	for {
+		if err := p.skipBlankLines(); err != nil {
 			return nil, err
 		}
 		if p.done() {
 			break
 		}
 
-		// Get the current indentation level.
+		// Check if de-dented, which marks the end of the current dict.
 		curIndent := p.getCurIndent()
-		if indent > 0 && curIndent < indent {
-			break
-		}
-		if curIndent != indent {
-			return nil, fmt.Errorf("line %d: bad indent %d, expected %d", p.line, curIndent, indent)
-		}
-		if !p.isKeyStart() {
-			// Check if there's actual content that should cause an error
-			if !p.done() && p.data[p.pos] != '\n' {
-				return nil, fmt.Errorf("line %d: invalid character '%c', expected key", p.line, p.data[p.pos])
-			}
+		if curIndent < indent {
 			break
 		}
 
-		// Get the key.
+		// Enforce strict indentation.
+		if curIndent != indent {
+			return nil, p.errorf("bad indent %d, expected %d", curIndent, indent)
+		}
+
+		if !p.isKeyStart() {
+			return nil, p.errorf("invalid character '%c', expected key", p.data[p.pos])
+		}
+
+		// Parse the key-value pair.
 		key, err := p.parseKey()
 		if err != nil {
 			return nil, err
 		}
 
-		// Get the indicator aftrer the key, ":" or "::".
+		if _, exists := out[key]; exists {
+			return nil, p.errorf("duplicate key '%s' in dict", key)
+		}
+
+		// The indicator determines if the value is a scalar (:) or vector (::).
 		indicator, err := p.parseIndicator()
 		if err != nil {
 			return nil, err
@@ -210,137 +146,124 @@ func (p *parser) parseDict(indent int) (any, error) {
 
 		var val any
 		if indicator == ":" {
-			val, err = p.parseScalarValueWithIndent(curIndent)
+			// A scalar value is on the same line as its key.
+			if err := p.expectSpace("after ':'"); err != nil {
+				return nil, err
+			}
+
+			// Determine if a value is multi-line *before* parsing it,
+			// because the multi-line parser consumes its own newlines.
+			isMultiline := p.peekString("```") || p.peekString(`"""`)
+
+			val, err = p.parseValue(curIndent)
+			if err != nil {
+				return nil, err
+			}
+
+			// If the parsed value was not a multi-line string, consume
+			// the rest of the line, which may include a comment.
+			if !isMultiline {
+				if err := p.consumeLine(); err != nil {
+					return nil, err
+				}
+			}
 		} else {
+			// A vector value starts on the next line or is inline.
 			val, err = p.parseVector(curIndent + 2)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if err != nil {
 			return nil, err
 		}
+
 		out[key] = val
 	}
 
 	return out, nil
 }
 
-// parseKey parses and returns the string key.
-func (p *parser) parseKey() (string, error) {
-	if p.data[p.pos] == '"' {
-		return p.parseString()
-	}
-
-	start := p.pos
-	for !p.done() && (isAlphaNum(p.data[p.pos]) || p.data[p.pos] == '-' || p.data[p.pos] == '_') {
-		p.pos++
-	}
-
-	if p.pos == start {
-		return "", fmt.Errorf("line %d: expected key", p.line)
-	}
-
-	return p.data[start:p.pos], nil
-}
-
-// parseIndicator parses the indicator after a key, whic is either ":" or "::".
-func (p *parser) parseIndicator() (string, error) {
-	if p.done() || p.data[p.pos] != ':' {
-		return "", fmt.Errorf("line %d: expected ':'", p.line)
-	}
-
-	p.pos++
-
-	if !p.done() && p.data[p.pos] == ':' {
-		p.pos++
-		return "::", nil
-	}
-
-	return ":", nil
-}
-
-func (p *parser) parseScalarValueWithIndent(indent int) (any, error) {
-	// After single :, must have exactly one space before value
-	if p.done() || p.data[p.pos] != ' ' {
-		return nil, fmt.Errorf("line %d: expected single space after ':'", p.line)
-	}
-	p.pos++
-
-	// Check for multiple spaces after :
-	if !p.done() && p.data[p.pos] == ' ' && (p.pos+1 >= len(p.data) || p.data[p.pos+1] != '#') {
-		return nil, fmt.Errorf("line %d: expected single space after ':'", p.line)
-	}
-
-	// After the required space, there must be a value, not newline or EOF.
-	if p.done() || p.data[p.pos] == '\n' {
-		return nil, fmt.Errorf("line %d: expected value after ':'", p.line)
-	}
-
-	// On reaching a comment after the space, there must be a preceding value.
-	if p.data[p.pos] == '#' {
-		return nil, fmt.Errorf("line %d: expected value after ':'", p.line)
-	}
-
-	// Check if this is a multiline string before parsing value.
-	isMultilineStr := p.peekString(`"""`) || p.peekString("```")
-
-	val, err := p.parseValue(indent)
-	if err != nil {
-		return nil, err
-	}
-
-	// No need to check line endings for multiline strings as they handle their own line consumption.
-	if !isMultilineStr {
-		if err := p.validateLineEnding(); err != nil {
-			return nil, err
-		}
-	}
-
-	if _, isStr := val.(string); !isStr {
-		p.skipToNextLine()
-	}
-
-	return val, nil
-}
-
-// parseVector handles the parsing of vectors after the double colon (::) indicator.
-// It can be either an inline list/dict or a multiline list/dict.
-func (p *parser) parseVector(indent int) (any, error) {
-	// After ::, check what follows.
-	if !p.done() && p.data[p.pos] == '#' {
-		return nil, fmt.Errorf("line %d: :: must be followed by a space before comment", p.line)
-	}
-
-	// Check for spaces after ::.
-	spacePos := p.pos
-	p.skipSpaces()
-
-	if p.done() || p.data[p.pos] == '\n' || p.data[p.pos] == '#' {
-		// Check if we had trailing spaces or validate comment
-		if p.done() || p.data[p.pos] == '\n' {
-			if p.pos > spacePos {
-				return nil, fmt.Errorf("line %d: trailing spaces not allowed", p.line)
-			}
-		} else if p.data[p.pos] == '#' {
-			if err := p.validateComment(); err != nil {
-				return nil, err
-			}
-		}
-		p.skipToNextLine()
-		if err := p.skipSpacesAndComments(); err != nil {
+// parseMultilineList parses a multi-line list at a given indentation level.
+func (p *parser) parseMultilineList(indent int) (any, error) {
+	var out []any
+	for {
+		if err := p.skipBlankLines(); err != nil {
 			return nil, err
 		}
 		if p.done() {
-			return nil, fmt.Errorf("line %d: ambiguous empty vector after '::'. Use [] or {}.", p.line-1)
+			break
 		}
 
 		curIndent := p.getCurIndent()
 		if curIndent < indent {
-			if p.data[p.pos] == '-' || p.isKeyStart() {
-				return nil, fmt.Errorf("line %d: bad indent %d, expected %d", p.line, curIndent, indent)
-			}
-
-			return nil, fmt.Errorf("line %d: ambiguous empty vector after '::'. Use [] or {}.", p.line-1)
+			break
+		}
+		if curIndent != indent {
+			return nil, p.errorf("bad indent %d, expected %d", curIndent, indent)
+		}
+		if p.data[p.pos] != '-' {
+			break // No longer in a list.
 		}
 
+		p.advance(1)
+		p.expectSpace("after '-'")
+
+		var (
+			val any
+			err error
+		)
+		// A list item can be a nested vector.
+		if p.peekString("::") {
+			p.advance(2)
+			val, err = p.parseVector(curIndent + 2)
+		} else {
+			// Or it can be a simple scalar value.
+			val, err = p.parseValue(curIndent)
+			if err == nil {
+				err = p.consumeLine()
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, val)
+	}
+
+	return out, nil
+}
+
+// parseVector parses a vector (list or dict) after a '::' indicator.
+func (p *parser) parseVector(indent int) (any, error) {
+	// After `::`, distinguish between an inline vector and a multi-line vector.
+	// A multi-line vector is indicated by a newline, or a comment followed by a newline.
+	// An inline vector is indicated by a single space followed by a value.
+	startPos := p.pos
+	p.skipSpaces()
+
+	// Check for indicators of a multi-line vector (a comment or the end of the line).
+	if p.done() || p.data[p.pos] == '\n' || p.data[p.pos] == '#' {
+		// This is a multi-line vector. Rewind to let consumeLine handle validation.
+		p.pos = startPos
+		if err := p.consumeLine(); err != nil {
+			return nil, err
+		}
+
+		// Now, parse the block that starts on the next line.
+		if err := p.skipBlankLines(); err != nil {
+			return nil, err
+		}
+		if p.done() {
+			return nil, p.errorf("ambiguous empty vector after '::'. Use [] or {}.")
+		}
+
+		curIndent := p.getCurIndent()
+		if curIndent < indent {
+			return nil, p.errorf("ambiguous empty vector after '::'. Use [] or {}.")
+		}
+
+		// The first character on the next line determines the type.
 		if p.data[p.pos] == '-' {
 			return p.parseMultilineList(curIndent)
 		}
@@ -348,287 +271,229 @@ func (p *parser) parseVector(indent int) (any, error) {
 		return p.parseDict(curIndent)
 	}
 
-	// For inline values after ::, must have exactly one space
-	if p.pos == spacePos {
-		return nil, fmt.Errorf("line %d: expected single space after '::'", p.line)
-	}
-	if p.pos-spacePos != 1 {
-		return nil, fmt.Errorf("line %d: expected single space after '::'", p.line)
+	// If it's not a multi-line vector, it must be an inline one.
+	// For an inline vector, there must be exactly one space after '::'.
+	p.pos = startPos
+	if err := p.expectSpace("after '::'"); err != nil {
+		return nil, err
 	}
 
 	return p.parseInlineVector()
 }
 
-// parseInlineVector parses an inline vector or dictionary.
+// parseInlineVector parses an inline vector, which can be a list, dict, or empty marker.
 func (p *parser) parseInlineVector() (any, error) {
-	// [] is a special case indicating an empty list.
+	// Special markers for empty list and dict.
 	if p.peekString("[]") {
 		p.advance(2)
-		// Check line ending after []
-		if err := p.validateLineEnding(); err != nil {
+		if err := p.consumeLine(); err != nil {
 			return nil, err
 		}
-		p.skipToNextLine()
 		return []any{}, nil
 	}
 
-	// {} is a special case indicating an empty dict.
 	if p.peekString("{}") {
 		p.advance(2)
-		// Check line ending after {}
-		if err := p.validateLineEnding(); err != nil {
+		if err := p.consumeLine(); err != nil {
 			return nil, err
 		}
-		p.skipToNextLine()
 		return map[string]any{}, nil
 	}
 
-	// Peek ahead to determine if dict or list.
-	var (
-		last   = p.pos
-		isDict = false
-	)
-	for i := p.pos; i < len(p.data) && p.data[i] != '\n' && p.data[i] != '#'; i++ {
-		// It's a dict.
-		if p.data[i] == ':' && (i+1 >= len(p.data) || p.data[i+1] != ':') {
-			isDict = true
-			break
-		}
-
-		// It's a list.
-		if p.data[i] == ',' {
-			break
-		}
-	}
-	p.pos = last
-
-	if isDict {
+	// To distinguish between an inline list and dict, check for a 'key:' pattern.
+	if p.hasInlineDict() {
 		return p.parseInlineDict()
 	}
 
 	return p.parseInlineList()
 }
 
-// parseInlineList parses an inline list where items are separated by commas.
-// Eg: list:: 1, "two", 3, true
+// parseInlineList parses a comma-separated list of scalar values.
 func (p *parser) parseInlineList() (any, error) {
 	var out []any
+	isFirst := true
 	for !p.done() && p.data[p.pos] != '\n' && p.data[p.pos] != '#' {
+		if !isFirst {
+			if err := p.expectComma(); err != nil {
+				return nil, err
+			}
+		}
+		isFirst = false
+
 		val, err := p.parseValue(0)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, val)
 
-		if err := p.parseInlineComma(); err != nil {
-			return nil, err
-		}
-		if p.done() || p.data[p.pos] == '\n' || p.data[p.pos] == '#' || p.data[p.pos] == ',' {
-			break
-		}
+		out = append(out, val)
+		p.skipSpaces() // Skips space after value, before comma or EOL.
+	}
+
+	if err := p.consumeLine(); err != nil {
+		return nil, err
 	}
 
 	return out, nil
 }
 
-// parseInlineDict parses an inline dictionary where key value pairs are separated by commas.
-// Eg: dict:: key1: "value", key2: 123, key3: true
+// parseInlineDict parses a comma-separated dict of scalar key-value pairs.
 func (p *parser) parseInlineDict() (any, error) {
 	res := map[string]any{}
+	isFirst := true
 	for !p.done() && p.data[p.pos] != '\n' && p.data[p.pos] != '#' {
+		if !isFirst {
+			if err := p.expectComma(); err != nil {
+				return nil, err
+			}
+		}
+		isFirst = false
+
 		key, err := p.parseKey()
 		if err != nil {
 			return nil, err
 		}
-
 		if p.done() || p.data[p.pos] != ':' {
-			return nil, fmt.Errorf("line %d: expected ':'", p.line)
+			return nil, p.errorf("expected ':' in inline dict")
 		}
+
 		p.advance(1)
-		p.skipSpaces()
+		if err := p.expectSpace("in inline dict"); err != nil {
+			return nil, err
+		}
 
 		val, err := p.parseValue(0)
 		if err != nil {
 			return nil, err
 		}
+
 		res[key] = val
+		p.skipSpaces()
+	}
 
-		if err := p.parseInlineComma(); err != nil {
-			return nil, err
-		}
-
-		if p.done() || p.data[p.pos] == '\n' || p.data[p.pos] == '#' || p.data[p.pos] == ',' {
-			break
-		}
+	if err := p.consumeLine(); err != nil {
+		return nil, err
 	}
 
 	return res, nil
 }
 
-// parseInlineComma checks for a comma in an inline list or dictionary.
-// Commas cannot have preceding spaces, and must be followed by exactly one space.
-// Eg: 1, "two", three
-func (p *parser) parseInlineComma() error {
+// parseKey parses a dict key, which can be a bare string or quoted.
+func (p *parser) parseKey() (string, error) {
+	p.skipSpaces()
+	if p.peekChar(p.pos) == '"' {
+		return p.parseString()
+	}
+
 	start := p.pos
-	p.skipSpaces()
-
-	if !p.done() && p.data[p.pos] == ',' {
-		if p.pos > start {
-			return fmt.Errorf("line %d: no spaces allowed before comma", p.line)
-		}
-		p.advance(1)
-
-		// After the comma, there must be exactly one space.
-		if p.done() || p.data[p.pos] != ' ' {
-			return fmt.Errorf("line %d: expected single space after comma", p.line)
-		}
-
-		p.advance(1)
-		if !p.done() && p.data[p.pos] == ' ' {
-			return fmt.Errorf("line %d: expected single space after comma", p.line)
-		}
+	for !p.done() && (isAlphaNum(p.data[p.pos]) || p.data[p.pos] == '-' || p.data[p.pos] == '_') {
+		p.pos++
+	}
+	if p.pos == start {
+		return "", p.errorf("expected a key")
 	}
 
-	return nil
+	return p.data[start:p.pos], nil
 }
 
-// parseMultilineList parses a list where every item starts with a dash (-) and continues through multiple lines.
-func (p *parser) parseMultilineList(indent int) (any, error) {
-	var out []any
-	for !p.done() {
-		if err := p.skipSpacesAndComments(); err != nil {
-			return nil, err
-		}
-		if p.done() {
-			break
-		}
-
-		currIndent := p.getCurIndent()
-		if currIndent < indent {
-			break
-		}
-		if currIndent > indent {
-			return nil, fmt.Errorf("line %d: bad indent %d, expected %d", p.line, currIndent, indent)
-		}
-
-		if p.data[p.pos] != '-' {
-			break
-		}
-
-		p.advance(1)
-		p.skipSpaces()
-
-		var (
-			val any
-			err error
-		)
-		if p.peekString("::") {
-			p.advance(2)
-			val, err = p.parseVector(currIndent + 2)
-		} else {
-			val, err = p.parseValue(currIndent)
-			if err == nil {
-				if err := p.validateLineEnding(); err != nil {
-					return nil, err
-				}
-
-				p.skipToNextLine()
-			}
-		}
-
-		if err != nil {
-			return nil, err
-		}
-
-		out = append(out, val)
+// parseIndicator parses the ':' or '::' after a key.
+func (p *parser) parseIndicator() (string, error) {
+	if p.done() || p.data[p.pos] != ':' {
+		return "", p.errorf("expected ':' or '::' after key")
 	}
 
-	return out, nil
+	p.advance(1)
+	if !p.done() && p.data[p.pos] == ':' {
+		p.advance(1)
+		return "::", nil
+	}
+
+	return ":", nil
 }
 
-// parseValue parses the value from the current position in the data.
+// parseValue parses any scalar value (string, number, bool, null).
 func (p *parser) parseValue(keyIndent int) (any, error) {
-	p.skipSpaces()
 	if p.done() {
-		return nil, nil
+		return nil, p.errorf("unexpected end of input, expected a value")
 	}
 
 	switch c := p.data[p.pos]; {
 	case c == '"':
 		if p.peekString(`"""`) {
-			return p.parseMultilineString(keyIndent)
+			return p.parseMultilineString(keyIndent, false)
 		}
 		return p.parseString()
-
 	case c == '`' && p.peekString("```"):
-		return p.parseMultilineString(keyIndent)
-
+		return p.parseMultilineString(keyIndent, true)
 	case c == 't' && p.peekString("true"):
 		p.advance(4)
 		return true, nil
-
 	case c == 'f' && p.peekString("false"):
 		p.advance(5)
 		return false, nil
-
 	case c == 'n' && p.peekString("null"):
 		p.advance(4)
 		return nil, nil
-
 	case c == 'n' && p.peekString("nan"):
 		p.advance(3)
 		return math.NaN(), nil
-
-	case (c == '+' || c == '-'):
-		// Is the next char a digit?
-		if isDigit(p.peekChar(p.pos + 1)) {
-			return p.parseNumber()
-		}
-
-		// Are the next chars "inf"?
-		p.advance(1)
-		if p.peekString("inf") {
-			sign := 1
-			if c == '-' {
-				sign = -1
-			}
-			p.advance(3)
-			return math.Inf(sign), nil
-		}
-
 	case c == 'i' && p.peekString("inf"):
 		p.advance(3)
 		return math.Inf(1), nil
+	case c == '+':
+		p.advance(1)
+		if p.peekString("inf") {
+			p.advance(3)
+			return math.Inf(1), nil
+		}
 
+		if isDigit(p.peekChar(p.pos)) {
+			// parseNumber will handle the sign.
+			p.pos--
+			return p.parseNumber()
+		}
+		return nil, p.errorf("invalid character after '+'")
+	case c == '-':
+		p.advance(1)
+		if p.peekString("inf") {
+			p.advance(3)
+			return math.Inf(-1), nil
+		}
+		if isDigit(p.peekChar(p.pos)) {
+			// parseNumber will handle the sign.
+			p.pos--
+			return p.parseNumber()
+		}
+		return nil, p.errorf("invalid character after '-'")
 	case isDigit(c):
 		return p.parseNumber()
-
 	default:
-		return nil, fmt.Errorf("line %d: invalid char '%c'", p.line, c)
+		return nil, p.errorf("unexpected character '%c' when parsing value", c)
 	}
-
-	return nil, fmt.Errorf("line %d: invalid char '%c'", p.line, p.data[p.pos])
 }
 
-// parseString parses a string from the current position in the data.
-// Strings are quoted with double quotes and can contain escaped characters.
+// parseString parses a standard double-quoted string with escapes.
 func (p *parser) parseString() (string, error) {
+	// Consume the quote.
 	p.advance(1)
-	var b strings.Builder
 
+	var b strings.Builder
 	for !p.done() {
-		switch c := p.data[p.pos]; {
-		case c == '"':
-			p.advance(1)
+		c := p.data[p.pos]
+		if c == '"' {
+			p.advance(1) // Consume trailing quote.
 			return b.String(), nil
-		case c == '\\':
-			p.advance(1)
+		}
+		if c == '\n' {
+			return "", p.errorf("newlines not allowed in single-line strings")
+		}
+		if c == '\\' {
+			p.advance(1) // Consume '\'.
 			if p.done() {
-				return "", fmt.Errorf("line %d: incomplete escape", p.line)
+				return "", p.errorf("incomplete escape sequence")
 			}
-			switch e := p.data[p.pos]; e {
+			switch esc := p.data[p.pos]; esc {
 			case '"', '\\', '/':
-				b.WriteByte(e)
+				b.WriteByte(esc)
 			case 'n':
 				b.WriteByte('\n')
 			case 't':
@@ -640,326 +505,346 @@ func (p *parser) parseString() (string, error) {
 			case 'f':
 				b.WriteByte('\f')
 			case 'u':
+				// Handle a 4-hex-digit Unicode escape sequence.
 				if p.pos+4 >= len(p.data) {
-					return "", fmt.Errorf("line %d: bad unicode escape", p.line)
+					return "", p.errorf("incomplete unicode escape sequence \\u")
 				}
 				hex := p.data[p.pos+1 : p.pos+5]
 				code, err := strconv.ParseUint(hex, 16, 32)
 				if err != nil {
-					return "", fmt.Errorf("line %d: invalid unicode: %s", p.line, hex)
+					return "", p.errorf("invalid unicode escape sequence \\u%s", hex)
 				}
 				b.WriteRune(rune(code))
+
+				// Consume the 4 hex digits.
 				p.advance(4)
 			default:
-				return "", fmt.Errorf("line %d: invalid escape '\\%c'", p.line, e)
+				return "", p.errorf("invalid escape character '\\%c'", esc)
 			}
-			p.advance(1)
-		default:
+		} else {
 			b.WriteByte(c)
-			p.advance(1)
 		}
+
+		// Consume the character or the final character of the escape code.
+		p.advance(1)
 	}
-	return "", fmt.Errorf("line %d: unclosed string", p.line)
+
+	return "", p.errorf("unclosed string")
 }
 
-// parseMultilineString parses a multi-line string starting with either `"""` or ```.
-// """ does not preserve indentation, while ``` preserves indentation of lines.
-func (p *parser) parseMultilineString(keyIndent int) (string, error) {
+// parseMultilineString parses ```` (preserve space) or `"""` (strip space) strings.
+func (p *parser) parseMultilineString(keyIndent int, preserveSpaces bool) (string, error) {
 	delim := p.data[p.pos : p.pos+3]
-	isPreserve := delim == "```"
-
-	// Advance past the indicator.
 	p.advance(3)
 
-	// Validate line ending after delimiter.
-	if err := p.validateLineEnding(); err != nil {
+	// Delimiter must be followed by a newline or valid comment.
+	if err := p.consumeLine(); err != nil {
 		return "", err
 	}
-	p.skipToNextLine()
 
-	reqIndent := keyIndent + 2
-	var lines []string
-	var minIndent = -1
-	closed := false
-
+	var builder strings.Builder
 	for !p.done() {
-		start := p.pos
-		for !p.done() && p.data[p.pos] != '\n' {
+		lineStartPos := p.pos
+		lineIndent := 0
+		for !p.done() && p.data[p.pos] == ' ' {
+			lineIndent++
 			p.pos++
 		}
 
-		line := p.data[start:p.pos]
+		// Check for the closing delimiter.
+		if p.peekString(delim) {
+			if lineIndent != keyIndent {
+				return "", p.errorf("multiline closing delimiter must be at same indentation as the key (%d spaces)", keyIndent)
+			}
+			// Consume delimiter.
+			p.advance(3)
 
-		if !p.done() {
-			p.advance(1)
-			p.line++
+			// After the closing delimiter, there might be a comment or a newline.
+			if err := p.consumeLine(); err != nil {
+				return "", p.errorf("invalid content after multiline string closing delimiter")
+			}
+
+			// Trim the final newline added by the loop.
+			return strings.TrimSuffix(builder.String(), "\n"), nil
 		}
 
-		// Verify indentation for multiline strings.
-		if trim := strings.TrimSpace(line); trim == delim {
-			// The delimiter must be at the same indentation level as the key.
-			indent := 0
-			for _, r := range line {
-				if r != ' ' {
-					break
-				}
-				indent++
-			}
-			if indent != keyIndent {
-				return "", fmt.Errorf("line %d: multiline closing delimiter must be at same indentation as the key (%d spaces)", p.line, keyIndent)
-			}
+		// Rewind to the start of the line to process its content.
+		p.pos = lineStartPos
+		lineContent := p.consumeLineContent()
 
-			closed = true
-			break
+		if preserveSpaces {
+			// Strip the required 2-space indent relative to the key.
+			requiredIndent := keyIndent + 2
+			if len(lineContent) >= requiredIndent && isSpaceString(lineContent[:requiredIndent]) {
+				builder.WriteString(lineContent[requiredIndent:])
+			} else {
+				builder.WriteString(lineContent)
+			}
+		} else {
+			// Strip all leading and trailing whitespace from the line.
+			builder.WriteString(strings.TrimSpace(lineContent))
 		}
 
-		if isPreserve {
-			if len(line) >= reqIndent && isSpaceString(line[:reqIndent]) {
-				line = line[reqIndent:]
-			}
-		} else if strings.TrimSpace(line) != "" {
-			indent := 0
-			for _, r := range line {
-				if r != ' ' {
-					break
-				}
-				indent++
-			}
-
-			if minIndent == -1 || indent < minIndent {
-				minIndent = indent
-			}
-		}
-		lines = append(lines, line)
+		builder.WriteByte('\n')
 	}
 
-	if !closed {
-		return "", fmt.Errorf("line %d: unclosed multiline string", p.line)
-	}
-
-	if !isPreserve && minIndent > 0 {
-		for i, line := range lines {
-			if len(line) >= minIndent && strings.TrimSpace(line) != "" {
-				lines[i] = line[minIndent:]
-			}
-		}
-	}
-	return strings.Join(lines, "\n"), nil
+	return "", p.errorf("unclosed multiline string")
 }
 
-// parseNumber parses a number from the current position in the data.
+// parseNumber parses any numeric format (integer, float, hex, octal, binary).
 func (p *parser) parseNumber() (any, error) {
 	start := p.pos
-	if p.data[p.pos] == '+' || p.data[p.pos] == '-' {
+	if p.peekChar(p.pos) == '+' || p.peekChar(p.pos) == '-' {
 		p.advance(1)
 	}
 
-	if p.pos < len(p.data) && p.data[p.pos] == '0' && p.pos+2 < len(p.data) {
-		switch p.data[p.pos+1] {
-		case 'x', 'X':
-			return p.parseBase(start, 16, "0x")
-
-		case 'o', 'O':
-			return p.parseBase(start, 8, "0o")
-
-		case 'b', 'B':
-			return p.parseBase(start, 2, "0b")
-		}
+	if p.peekString("0x") {
+		return p.parseBase(start, 16, "0x")
+	}
+	if p.peekString("0o") {
+		return p.parseBase(start, 8, "0o")
+	}
+	if p.peekString("0b") {
+		return p.parseBase(start, 2, "0b")
 	}
 
-	hasDecimal, hasExponent := false, false
+	isFloat := false
 loop:
 	for !p.done() {
-		switch c := p.data[p.pos]; {
+		c := p.data[p.pos]
+		switch {
 		case isDigit(c) || c == '_':
-		case c == '.' && !hasDecimal && !hasExponent:
-			hasDecimal = true
-		case (c == 'e' || c == 'E') && !hasExponent:
-			hasExponent = true
-			if p.pos+1 < len(p.data) && (p.data[p.pos+1] == '+' || p.data[p.pos+1] == '-') {
+			p.advance(1)
+		case c == '.':
+			isFloat = true
+			p.advance(1)
+		case (c == 'e' || c == 'E'):
+			isFloat = true
+			p.advance(1)
+			if p.peekChar(p.pos) == '+' || p.peekChar(p.pos) == '-' {
 				p.advance(1)
 			}
-
 		default:
 			break loop
 		}
-
-		p.advance(1)
 	}
 
-	// Strip optional underscores from the number string (eg: 123_456).
-	numStr := stripNumUnderscores(p.data[start:p.pos])
-	if hasDecimal || hasExponent {
+	// Replace any underscores in the number string.
+	numStr := strings.ReplaceAll(p.data[start:p.pos], "_", "")
+	if isFloat {
 		return strconv.ParseFloat(numStr, 64)
 	}
 
 	return strconv.ParseInt(numStr, 10, 64)
 }
 
-// parseBase parses a number in a specific base (2, 8, or 16) with an optional prefix.
-func (p *parser) parseBase(start int, base int, prefix string) (int64, error) {
+// parseBase parses a number in a non-decimal base.
+func (p *parser) parseBase(start, base int, prefix string) (int64, error) {
 	p.advance(len(prefix))
+	numStart := p.pos
 	for !p.done() {
 		c := p.data[p.pos]
-		if (base == 16 && !isHex(c)) || (base == 8 && !(c >= '0' && c <= '7')) || (base == 2 && !(c == '0' || c == '1')) {
+		valid := false
+		switch base {
+		case 16:
+			valid = isHex(c)
+		case 8:
+			valid = c >= '0' && c <= '7'
+		case 2:
+			valid = c == '0' || c == '1'
+		}
+		if !valid {
 			break
 		}
 		p.advance(1)
 	}
+	if p.pos == numStart {
+		return 0, p.errorf("invalid number literal, requires digits after prefix")
+	}
 
-	// Strip optional underscores from the number string (eg: 123_456).
-	numStr := stripNumUnderscores(p.data[start+len(prefix) : p.pos])
-	return strconv.ParseInt(numStr, base, 64)
+	sign := ""
+	if p.data[start] == '+' || p.data[start] == '-' {
+		sign = string(p.data[start])
+	}
+
+	numStr := strings.ReplaceAll(p.data[numStart:p.pos], "_", "")
+	val, err := strconv.ParseInt(numStr, base, 64)
+	if err != nil {
+		return 0, p.errorf("invalid number: %v", err)
+	}
+	if sign == "-" {
+		return -val, nil
+	}
+
+	return val, nil
 }
 
-// validateLineEnding checks for trailing spaces or comments at the end of a line.
-func (p *parser) validateLineEnding() error {
-	// Skip spaces and check for trailing spaces or the presence of a comment.
-	spaceStart := p.pos
+// skipBlankLines consumes empty lines and comment-only lines, validating them.
+func (p *parser) skipBlankLines() error {
+	for !p.done() {
+		p.skipSpaces()
+		if p.done() || (p.data[p.pos] != '\n' && p.data[p.pos] != '#') {
+			// Found content, stop.
+			return nil
+		}
+
+		// Consume the blank or comment-only line.
+		if err := p.consumeLine(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// consumeLine validates and consumes the rest of a line.
+// It ensures there are no trailing spaces and that comments are well-formed.
+func (p *parser) consumeLine() error {
+	contentStartPos := p.pos
 	p.skipSpaces()
 
-	// Line ends in trailing spaces.
 	if p.done() || p.data[p.pos] == '\n' {
-		if p.pos > spaceStart {
-			return fmt.Errorf("line %d: trailing spaces not allowed", p.line)
+		if p.pos > contentStartPos {
+			return p.errorf("trailing spaces are not allowed")
 		}
-		return nil
-	}
-
-	// It's a comment.
-	if p.data[p.pos] == '#' {
-		// # should always be preceded by a space.
-		if p.pos == spaceStart {
-			return fmt.Errorf("line %d: comment must be preceded by a space", p.line)
+	} else if p.data[p.pos] == '#' {
+		if p.pos == contentStartPos && p.getCurIndent() != p.pos-p.lineStart() {
+			return p.errorf("a value must be separated from an inline comment by a space")
 		}
 
-		return p.validateComment()
+		// Consume '#'.
+		p.pos++
+		if !p.done() && p.data[p.pos] != ' ' && p.data[p.pos] != '\n' {
+			return p.errorf("comment hash '#' must be followed by a space")
+		}
+	} else {
+		return p.errorf("unexpected content at end of line")
 	}
 
-	return fmt.Errorf("line %d: unexpected content after value", p.line)
-}
-
-// validateComment checks for valid comment syntax and trailing spaces.
-func (p *parser) validateComment() error {
-	p.pos++
-
-	// # Should immediately be followed by a space or newline.
-	if !p.done() && p.data[p.pos] != ' ' && p.data[p.pos] != '\n' {
-		return fmt.Errorf("line %d: comment must have space after #", p.line)
-	}
-
-	// Check for trailing spaces.
+	commentEndPos := p.pos
 	for !p.done() && p.data[p.pos] != '\n' {
 		p.pos++
 	}
+
 	if p.pos > 0 && p.data[p.pos-1] == ' ' {
-		return fmt.Errorf("line %d: trailing spaces not allowed", p.line)
-	}
-
-	return nil
-}
-
-// skipSpaces skips over spaces in the stream.
-func (p *parser) skipSpaces() {
-	for !p.done() && p.data[p.pos] == ' ' {
-		p.advance(1)
-	}
-}
-
-// skipSpacesAndComments skips over spaces and comments in the stream.
-func (p *parser) skipSpacesAndComments() error {
-	for !p.done() {
-		switch p.data[p.pos] {
-		case ' ':
-			// Check if this space extends to end of line (trailing space)
-			pos := p.pos
-			for pos < len(p.data) && p.data[pos] == ' ' {
-				pos++
-			}
-
-			// Disallow trailing spaces.
-			if pos >= len(p.data) || p.data[pos] == '\n' {
-				return fmt.Errorf("line %d: trailing spaces not allowed", p.line)
-			}
-
-			p.advance(1)
-
-		case '\n':
-			p.advance(1)
-			p.line++
-
-		case '#':
-			// Check if this is a comment-only line (starts at the beginning or after spaces).
-			isLineComment := true
-			pos := p.pos - 1
-			for pos >= 0 && p.data[pos] != '\n' {
-				if p.data[pos] != ' ' {
-					isLineComment = false
-					break
-				}
-
-				pos--
-			}
-
-			// If it's a comment only line, stricly validate spaces still.
-			if isLineComment {
-				p.pos++ // Skip the # char.
-				if !p.done() && p.data[p.pos] != ' ' && p.data[p.pos] != '\n' {
-					return fmt.Errorf("line %d: comment must have space after #", p.line)
-				}
-
-				// Check for trailing spaces in the comment.
-				commentStart := p.pos
-				for !p.done() && p.data[p.pos] != '\n' {
-					p.pos++
-				}
-				if p.pos > commentStart && p.data[p.pos-1] == ' ' {
-					return fmt.Errorf("line %d: trailing spaces not allowed", p.line)
-				}
-
-				// Skip newline.
-				if !p.done() {
-					p.pos++
-					p.line++
-				}
-			} else {
-				// Inline comment, just skip to the end of the line.
-				p.skipToNextLine()
-			}
-		default:
-			return nil
+		// Check the character before the trailing space.
+		if p.pos-1 > commentEndPos {
+			return p.errorf("trailing spaces are not allowed")
 		}
-	}
-	return nil
-}
-
-func (p *parser) skipToNextLine() {
-	for !p.done() && p.data[p.pos] != '\n' {
-		p.advance(1)
 	}
 
 	if !p.done() && p.data[p.pos] == '\n' {
-		p.advance(1)
+		p.pos++
 		p.line++
 	}
+
+	return nil
 }
 
-func (p *parser) getCurIndent() int {
-	save := p.pos
-	for save > 0 && p.data[save-1] != '\n' {
-		save--
+// consumeLineContent reads the rest of a line without validation, used for multiline strings.
+func (p *parser) consumeLineContent() string {
+	start := p.pos
+	for !p.done() && p.data[p.pos] != '\n' {
+		p.pos++
 	}
 
-	indent := 0
-	for save+indent < len(p.data) && p.data[save+indent] == ' ' {
+	content := p.data[start:p.pos]
+	if !p.done() && p.data[p.pos] == '\n' {
+		p.pos++
+		p.line++
+	}
+
+	return content
+}
+
+// expectSpace consumes exactly one space and returns an error if not found.
+func (p *parser) expectSpace(context string) error {
+	if p.done() || p.data[p.pos] != ' ' {
+		return p.errorf("expected single space %s", context)
+	}
+
+	p.advance(1)
+	if !p.done() && p.data[p.pos] == ' ' {
+		return p.errorf("expected single space %s, found multiple", context)
+	}
+
+	return nil
+}
+
+// expectComma consumes a comma, ensuring correct spacing.
+func (p *parser) expectComma() error {
+	p.skipSpaces()
+	if p.done() || p.data[p.pos] != ',' {
+		return p.errorf("expected a comma in inline collection")
+	}
+
+	if p.pos > 0 && p.data[p.pos-1] == ' ' {
+		return p.errorf("no spaces allowed before comma")
+	}
+	p.advance(1)
+
+	return p.expectSpace("after comma")
+}
+
+// getCurIndent calculates the indentation of the current line.
+func (p *parser) getCurIndent() int {
+	var (
+		lineStart = p.lineStart()
+		indent    = 0
+	)
+	for lineStart+indent < len(p.data) && p.data[lineStart+indent] == ' ' {
 		indent++
 	}
 
 	return indent
 }
 
+// lineStart returns the starting position of the current line.
+func (p *parser) lineStart() int {
+	start := p.pos
+	if start > 0 && start <= len(p.data) && p.data[start-1] == '\n' {
+		return start
+	}
+
+	for start > 0 && p.data[start-1] != '\n' {
+		start--
+	}
+
+	return start
+}
+
+// hasKeyValuePair checks if the current line looks like a `key: value` pair.
+func (p *parser) hasKeyValuePair() bool {
+	// A simple lookahead to distinguish a dict from a scalar at the root.
+	last := p.pos
+	defer func() { p.pos = last }()
+
+	if _, err := p.parseKey(); err != nil {
+		return false
+	}
+
+	return !p.done() && p.data[p.pos] == ':'
+}
+
+// hasInlineDict peeks ahead to see if an inline collection is a dict.
+func (p *parser) hasInlineDict() bool {
+	// A simple lookahead to differentiate `key: val, ...` from `val1, val2, ...`
+	pos := p.pos
+	for pos < len(p.data) && p.data[pos] != '\n' && p.data[pos] != '#' {
+		if p.data[pos] == ':' {
+			if pos+1 < len(p.data) && p.data[pos+1] != ':' {
+				// Found a scalar indicator ':'.
+				return true
+			}
+		}
+		pos++
+	}
+
+	return false
+}
+
 func (p *parser) isKeyStart() bool {
-	return !p.done() && (p.data[p.pos] == '"' || isAlpha(p.data[p.pos]) || p.data[p.pos] == '_')
+	return !p.done() && (p.data[p.pos] == '"' || isAlpha(p.data[p.pos]))
 }
 
 func (p *parser) done() bool {
@@ -970,83 +855,55 @@ func (p *parser) advance(n int) {
 	p.pos += n
 }
 
+func (p *parser) skipSpaces() {
+	for !p.done() && p.data[p.pos] == ' ' {
+		p.advance(1)
+	}
+}
+
 func (p *parser) peekString(s string) bool {
-	end := p.pos + len(s)
-	return end <= len(p.data) && p.data[p.pos:end] == s
+	return strings.HasPrefix(p.data[p.pos:], s)
 }
 
 func (p *parser) peekChar(pos int) byte {
-	if len(p.data) < pos {
+	if pos >= len(p.data) || pos < 0 {
 		return 0
 	}
-
 	return p.data[pos]
 }
 
 func setValue(dst, src any) error {
-	switch d := dst.(type) {
-	case *any:
-		*d = src
-	case *map[string]any:
-		if m, ok := src.(map[string]any); ok {
-			*d = m
-			return nil
-		}
-		return errors.New("cannot assign non-map to map")
-
-	case *[]any:
-		if s, ok := src.([]any); ok {
-			*d = s
-			return nil
-		}
-		return errors.New("cannot assign non-slice to slice")
-
-	case *string:
-		if s, ok := src.(string); ok {
-			*d = s
-			return nil
-		}
-		return errors.New("cannot assign non-string to string")
-
-	case *int:
-		if n, ok := src.(int64); ok {
-			*d = int(n)
-			return nil
-		}
-		return errors.New("cannot assign non-int to int")
-
-	case *int64:
-		if n, ok := src.(int64); ok {
-			*d = n
-			return nil
-		}
-		return errors.New("cannot assign non-int64 to int64")
-
-	case *float64:
-		switch s := src.(type) {
-		case float64:
-			*d = s
-		case int64:
-			*d = float64(s)
-		default:
-			return errors.New("cannot assign non-number to float64")
-		}
-		return nil
-
-	case *bool:
-		if b, ok := src.(bool); ok {
-			*d = b
-			return nil
-		}
-		return errors.New("cannot assign non-bool to bool")
-	default:
-		return fmt.Errorf("unsupported type: %T", dst)
+	if dst == nil {
+		return errors.New("cannot unmarshal into a nil value")
 	}
 
-	return nil
+	val := reflect.ValueOf(dst)
+	if val.Kind() != reflect.Ptr {
+		return errors.New("destination is not a pointer")
+	}
+	if val.IsNil() {
+		return errors.New("destination pointer is nil")
+	}
+
+	var (
+		d = val.Elem()
+		s = reflect.ValueOf(src)
+	)
+
+	// If the destination is an interface, set it directly.
+	if d.Kind() == reflect.Interface {
+		d.Set(s)
+		return nil
+	}
+
+	if s.IsValid() && s.Type().AssignableTo(d.Type()) {
+		d.Set(s)
+		return nil
+	}
+
+	return fmt.Errorf("cannot assign %T to %s", src, d.Type())
 }
 
-// Helper functions
 func isDigit(c byte) bool {
 	return c >= '0' && c <= '9'
 }
@@ -1064,40 +921,29 @@ func isHex(c byte) bool {
 }
 
 func isSpaceString(s string) bool {
-	for _, r := range s {
-		if r != ' ' {
-			return false
-		}
-	}
-	return true
+	return strings.TrimSpace(s) == ""
 }
 
-func stripNumUnderscores(s string) string {
-	return strings.ReplaceAll(s, "_", "")
-}
-
-// Example usage and test
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Println("Usage: huml <filename>")
-		return
+		os.Exit(1)
 	}
-	// Read from file specified in command line
 	raw, err := os.ReadFile(os.Args[1])
 	if err != nil {
-		panic(err)
+		log.Fatalf("Error reading file: %v", err)
 	}
 
 	var result any
-	if err := Unmarshal([]byte(raw), &result); err != nil {
+	if err := Unmarshal(raw, &result); err != nil {
 		fmt.Printf("Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
-	b, err := json.Marshal(result)
+	b, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error marshalling to JSON: %v", err)
 	}
 
-	fmt.Print(string(b))
+	fmt.Println(string(b))
 }
