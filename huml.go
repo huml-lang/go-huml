@@ -934,7 +934,11 @@ func setValue(dst, src any) error {
 
 	// If the destination is an interface, set it directly.
 	if d.Kind() == reflect.Interface {
-		d.Set(s)
+		if s.IsValid() {
+			d.Set(s)
+		} else {
+			d.Set(reflect.Zero(d.Type()))
+		}
 		return nil
 	}
 
