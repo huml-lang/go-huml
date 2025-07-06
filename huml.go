@@ -66,20 +66,85 @@ func (p *parser) parseDocument() (any, error) {
 		return map[string]any{}, nil
 	}
 
-	// All root content must start at column 0.
+	// Root element must not be indented
 	if p.getCurIndent() != 0 {
 		return nil, p.errorf("root element must not be indented")
 	}
 
-	// A document can be a root list, a dict, or a single scalar value.
+	// Root indicators : and :: are not permitted at document root
+	if p.peekString("::") {
+		return nil, p.errorf("'::' indicator not allowed at document root")
+	}
+	if p.peekString(":") && !p.hasKeyValuePair() {
+		return nil, p.errorf("':' indicator not allowed at document root")
+	}
+
+	// A document can be a dict, inline list, multiline list, or scalar value.
 	switch {
-	case p.peekString("::"):
-		// A key-less document starting with `::` is a root list or dict.
-		p.advance(len("::"))
-		return p.parseVector(0)
+	case p.hasKeyValuePair() && p.hasInlineDictAtRoot():
+		// The document is an inline dict.
+		val, err := p.parseInlineDict()
+		if err != nil {
+			return nil, err
+		}
+
+		// Ensure no other content follows the inline dict.
+		if err := p.skipBlankLines(); err != nil {
+			return nil, err
+		}
+		if !p.done() {
+			return nil, p.errorf("unexpected content after root inline dict")
+		}
+
+		return val, nil
 	case p.hasKeyValuePair():
-		// The document is a standard dict.
+		// The document is a standard multi-line dict.
 		return p.parseDict(0)
+	case p.peekString("[]"):
+		// Empty list at root
+		p.advance(2)
+		if err := p.consumeLine(); err != nil {
+			return nil, err
+		}
+		if err := p.skipBlankLines(); err != nil {
+			return nil, err
+		}
+		if !p.done() {
+			return nil, p.errorf("unexpected content after root list")
+		}
+		return []any{}, nil
+	case p.peekString("{}"):
+		// Empty dict at root
+		p.advance(2)
+		if err := p.consumeLine(); err != nil {
+			return nil, err
+		}
+		if err := p.skipBlankLines(); err != nil {
+			return nil, err
+		}
+		if !p.done() {
+			return nil, p.errorf("unexpected content after root dict")
+		}
+		return map[string]any{}, nil
+	case p.peekChar(p.pos) == '-':
+		// Multiline list at root
+		return p.parseMultilineList(0)
+	case p.hasInlineListAtRoot():
+		// Inline list at root (comma-separated values)
+		val, err := p.parseInlineList()
+		if err != nil {
+			return nil, err
+		}
+
+		// Ensure no other content follows the inline list.
+		if err := p.skipBlankLines(); err != nil {
+			return nil, err
+		}
+		if !p.done() {
+			return nil, p.errorf("unexpected content after root inline list")
+		}
+
+		return val, nil
 	default:
 		// The document is a single scalar value.
 		val, err := p.parseValue(0)
@@ -883,6 +948,100 @@ func (p *parser) hasInlineDict() bool {
 	}
 
 	return false
+}
+
+// hasInlineListAtRoot checks if the document starts with an inline list (comma-separated values).
+func (p *parser) hasInlineListAtRoot() bool {
+	// Simple lookahead to detect comma-separated values at root (not a key-value pair)
+	pos := p.pos
+	for pos < len(p.data) && p.data[pos] != '\n' && p.data[pos] != '#' {
+		if p.data[pos] == ',' {
+			return true
+		}
+		if p.data[pos] == ':' {
+			// This would be a key-value pair, not an inline list
+			return false
+		}
+		pos++
+	}
+	return false
+}
+
+// hasInlineDictAtRoot checks if the document starts with an inline dict (key-value pairs with commas).
+func (p *parser) hasInlineDictAtRoot() bool {
+	// At root level, check if we have key: value, key: value pattern on same line
+	// But make sure we don't have :: at the beginning (which would be a keyed vector)
+	pos := p.pos
+	foundColon := false
+	foundComma := false
+	foundDoubleColon := false
+
+	// Check the current line for inline dict pattern
+	for pos < len(p.data) && p.data[pos] != '\n' && p.data[pos] != '#' {
+		if p.data[pos] == ':' {
+			if pos+1 < len(p.data) && p.data[pos+1] == ':' {
+				foundDoubleColon = true
+			} else {
+				foundColon = true
+			}
+		}
+		if p.data[pos] == ',' {
+			foundComma = true
+		}
+		pos++
+	}
+
+	// Only consider it an inline dict if we have both : and , on the same line
+	// but NOT :: (which would be a keyed vector)
+	if !(foundColon && foundComma && !foundDoubleColon) {
+		return false
+	}
+
+	// For a true inline dict at root, there should be no subsequent content
+	// (except comments and blank lines) after this line
+
+	// Skip to end of current line
+	for pos < len(p.data) && p.data[pos] != '\n' {
+		pos++
+	}
+	if pos < len(p.data) && p.data[pos] == '\n' {
+		pos++ // Skip the newline
+	}
+
+	// Check if there's any content that would make this a multi-line dict
+	for pos < len(p.data) {
+		// Skip spaces at start of line
+		for pos < len(p.data) && p.data[pos] == ' ' {
+			pos++
+		}
+
+		if pos >= len(p.data) {
+			break // End of input
+		}
+
+		if p.data[pos] == '\n' {
+			// Blank line, continue
+			pos++
+			continue
+		}
+
+		if p.data[pos] == '#' {
+			// Comment line, skip to end of line
+			for pos < len(p.data) && p.data[pos] != '\n' {
+				pos++
+			}
+			if pos < len(p.data) && p.data[pos] == '\n' {
+				pos++
+			}
+			continue
+		}
+
+		// Found non-blank, non-comment content
+		// This means it's a multi-line dict, not an inline dict at root
+		return false
+	}
+
+	return true
 }
 
 func (p *parser) isKeyStart() bool {

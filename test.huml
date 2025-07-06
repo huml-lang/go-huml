@@ -142,9 +142,9 @@ foo_three::
   """
 
   baz_multiline_edge: ```
-Line with no indent
-    Line with indent
-Line back to no indent
+    Line with no indent
+        Line with indent
+    Line back to no indent
   ```
 
   # Boolean variations

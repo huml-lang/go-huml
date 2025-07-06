@@ -94,16 +94,17 @@ func TestParsing(t *testing.T) {
 
 	// Root list cases.
 	f("root_empty_list_colon", "::", true)
-	f("root_empty_list", ":: []", false)
-	f("root_empty_dict", ":: {}", false)
-	f("root_inline_list", ":: 1, 2, 3", false)
-	f("root_multiline_list", "::\n  - \"item1\"\n  - \"item2\"", false)
+	f("root_empty_list", ":: []", true)
+	f("root_empty_dict", ":: {}", true)
+	f("root_inline_list", ":: 1, 2, 3", true)
+	f("root_inline_list_other_key", "1, 2, 3\nfoo: 1", true)
+	f("root_multiline_list", "::\n  - \"item1\"\n  - \"item2\"", true)
 	f("root_multiline_unquoted_values", "::\n  - item1\n  - item2", true)
 	f("root_multiline_bad_indentation", "::\n - item1\n  - item2", true)
 
-	f("root_list", ":: []", false)
-	f("root_dict", ":: {}", false)
-	f("root_dict_comment", "# test\n:: {}", false)
+	f("root_list", ":: []", true)
+	f("root_dict", ":: {}", true)
+	f("root_dict_comment", "# test\n:: {}", true)
 	f("root_scalar", "123", false)
 	f("root_scalar", "", false)
 	f("root_scalar", "\n\"test\"", false)
@@ -112,8 +113,11 @@ func TestParsing(t *testing.T) {
 	f("root_scalar_blank_then_extra", "true\n\nextra content", true)
 
 	f("root_invalid", " ::", true)
-	f("root_invalid_list", "\n\n[]\n\n", true)
-	f("root_invalid_dict", "\n{}", true)
+	f("root_empty_list", "\n\n[]\n\n", false)
+	f("root_empty_dict", "\n{}", false)
+	f("root_inline_dict", "a: 1, b: 2, c: \"val\"", false)
+	f("root_inline_dict_invalid", " a: 1, b: 2, c: \"val\"", true)
+	f("root_inline_dict_invalid", "a: 1, b: 2\nc: 3\nd: 4", true)
 	f("root_invalid_list", "   []", true)
 	f("root_invalid_dict", "   {}", true)
 	f("root_invalid_list", "  ::[]", true)
@@ -310,7 +314,7 @@ func TestValues(t *testing.T) {
 	f("empty_list", "list:: []", map[string]any{"list": []any{}})
 	f("empty_dict", "dict:: {}", map[string]any{"dict": map[string]any{}})
 	f("inline_list", "list:: 1, 2, 3", map[string]any{"list": []any{int64(1), int64(2), int64(3)}})
-	f("root_list", ":: 1, 2, 3, 5.6, +4, -2", []any{int64(1), int64(2), int64(3), float64(5.6), int64(4), int64(-2)})
+	f("root_list", "1, 2, 3, 5.6, +4, -2", []any{int64(1), int64(2), int64(3), float64(5.6), int64(4), int64(-2)})
 
 	// Test special numeric values
 	t.Run("special_numbers", func(t *testing.T) {

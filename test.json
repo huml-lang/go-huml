@@ -92,7 +92,7 @@
       "h": null
     },
     "bar_multiline_stripped": "Stripped formatting\nThis will be normalized\nAll leading whitespace removed\nConsistent indentation\nFinal line",
-    "baz_multiline_edge": "Line with no indent\nLine with indent\nLine back to no indent",
+    "baz_multiline_edge": "Line with no indent\n    Line with indent\nLine back to no indent",
     "foo_booleans": {
       "bar_true": true,
       "baz_false": false,
