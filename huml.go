@@ -53,6 +53,26 @@ func (p *parser) parse() (any, error) {
 	// A document can begin with a version declaration.
 	if p.peekString("%HUML") {
 		p.advance(len("%HUML"))
+
+		// Check for optional semver string after the indicator.
+		var version string
+		if !p.done() && p.data[p.pos] == ' ' {
+			p.advance(1)
+
+			// Parse the semver string.
+			start := p.pos
+			for !p.done() && p.data[p.pos] != ' ' && p.data[p.pos] != '\n' && p.data[p.pos] != '#' {
+				p.pos++
+			}
+
+			if p.pos > start {
+				version = string(p.data[start:p.pos])
+				if version != "v0.1.0" {
+					return nil, p.errorf("unsupported version '%s'. expected 'v0.1.0'", version)
+				}
+			}
+		}
+
 		// The rest of the version line is ignored, but must be well-formed.
 		if err := p.consumeLine(); err != nil {
 			return nil, err
