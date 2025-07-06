@@ -32,7 +32,7 @@ func TestParsing(t *testing.T) {
 		})
 	}
 
-	f("empty_input", "", false)
+	f("empty_input", "", true)
 	f("whitespace_only", "   \n  \n  ", true)
 	f("comments_only", "# comment\n# another comment", false)
 	f("version_directive_with_comment", "%HUML 1.0 # version comment", true)
@@ -106,7 +106,7 @@ func TestParsing(t *testing.T) {
 	f("root_dict", ":: {}", true)
 	f("root_dict_comment", "# test\n:: {}", true)
 	f("root_scalar", "123", false)
-	f("root_scalar", "", false)
+	f("root_scalar_empty", "", true)
 	f("root_scalar", "\n\"test\"", false)
 	f("root_scalar_with_extra_content", "123\nextra content", true)
 	f("root_scalar_with_comment_extra", "\"test\" # comment\nextra", true)

@@ -12,6 +12,18 @@ import (
 	"strings"
 )
 
+type dataType int
+
+const (
+	typeScalar dataType = iota
+	typeEmptyDict
+	typeInlineDict
+	typeMultilineDict
+	typeEmptyList
+	typeInlineList
+	typeMultilineList
+)
+
 // parser holds the state of the parsing process.
 type parser struct {
 	data []byte // The input HUML data.
@@ -19,34 +31,25 @@ type parser struct {
 	line int    // The current line number, for error reporting.
 }
 
-// Unmarshal parses HUML data and stores the result in the value pointed to by v.
-// It is the main entry point for the HUML parser.
+// Unmarshal parses HUML data and stores the result in v.
 func Unmarshal(data []byte, v any) error {
-	// A completely empty document is a valid empty dict.
 	if len(data) == 0 {
-		return setValue(v, map[string]any{})
+		return errors.New("empty document is undefined")
 	}
 
 	p := &parser{data: data, line: 1}
 
 	// Parse the document. The result can be any valid HUML type.
-	out, err := p.parseDocument()
+	out, err := p.parse()
 	if err != nil {
 		return err
 	}
 
-	// The parsed Go value is assigned to the user-provided variable.
 	return setValue(v, out)
 }
 
-// errorf creates a new error with the current line number.
-// This is a helper to consistently format error messages.
-func (p *parser) errorf(format string, args ...any) error {
-	return fmt.Errorf("line %d: "+format, append([]any{p.line}, args...)...)
-}
-
-// parseDocument is the top-level parsing function for a HUML document.
-func (p *parser) parseDocument() (any, error) {
+// parse is the top-level parsing function for a HUML document.
+func (p *parser) parse() (any, error) {
 	// A document can begin with a version declaration.
 	if p.peekString("%HUML") {
 		p.advance(len("%HUML"))
@@ -66,12 +69,12 @@ func (p *parser) parseDocument() (any, error) {
 		return map[string]any{}, nil
 	}
 
-	// Root element must not be indented
+	// Root element must not be indented.
 	if p.getCurIndent() != 0 {
 		return nil, p.errorf("root element must not be indented")
 	}
 
-	// Root indicators : and :: are not permitted at document root
+	// Root indicators : and :: are not permitted at document root.
 	if p.peekString("::") {
 		return nil, p.errorf("'::' indicator not allowed at document root")
 	}
@@ -79,96 +82,103 @@ func (p *parser) parseDocument() (any, error) {
 		return nil, p.errorf("':' indicator not allowed at document root")
 	}
 
-	// A document can be a dict, inline list, multiline list, or scalar value.
-	switch {
-	case p.hasKeyValuePair() && p.hasInlineDictAtRoot():
-		// The document is an inline dict.
-		val, err := p.parseInlineDict()
+	// Determine document type and parse accordingly.
+	switch p.getRootType() {
+	case typeInlineDict:
+		val, err := p.parseInlineVectorContents(typeInlineDict)
 		if err != nil {
 			return nil, err
 		}
+		return p.assertRootEnd(val, "root inline dict")
 
-		// Ensure no other content follows the inline dict.
-		if err := p.skipBlankLines(); err != nil {
-			return nil, err
-		}
-		if !p.done() {
-			return nil, p.errorf("unexpected content after root inline dict")
-		}
+	case typeMultilineDict:
+		return p.parseMultilineDict(0)
 
-		return val, nil
-	case p.hasKeyValuePair():
-		// The document is a standard multi-line dict.
-		return p.parseDict(0)
-	case p.peekString("[]"):
-		// Empty list at root
+	case typeEmptyList:
 		p.advance(2)
 		if err := p.consumeLine(); err != nil {
 			return nil, err
 		}
-		if err := p.skipBlankLines(); err != nil {
-			return nil, err
-		}
-		if !p.done() {
-			return nil, p.errorf("unexpected content after root list")
-		}
-		return []any{}, nil
-	case p.peekString("{}"):
-		// Empty dict at root
+		return p.assertRootEnd([]any{}, "root list")
+
+	case typeEmptyDict:
 		p.advance(2)
 		if err := p.consumeLine(); err != nil {
 			return nil, err
 		}
-		if err := p.skipBlankLines(); err != nil {
-			return nil, err
-		}
-		if !p.done() {
-			return nil, p.errorf("unexpected content after root dict")
-		}
-		return map[string]any{}, nil
-	case p.peekChar(p.pos) == '-':
-		// Multiline list at root
+		return p.assertRootEnd(map[string]any{}, "root dict")
+
+	case typeMultilineList:
 		return p.parseMultilineList(0)
-	case p.hasInlineListAtRoot():
-		// Inline list at root (comma-separated values)
-		val, err := p.parseInlineList()
+
+	case typeInlineList:
+		val, err := p.parseInlineVectorContents(typeInlineList)
 		if err != nil {
 			return nil, err
 		}
+		return p.assertRootEnd(val, "root inline list")
 
-		// Ensure no other content follows the inline list.
-		if err := p.skipBlankLines(); err != nil {
-			return nil, err
-		}
-		if !p.done() {
-			return nil, p.errorf("unexpected content after root inline list")
-		}
-
-		return val, nil
-	default:
-		// The document is a single scalar value.
+	case typeScalar:
 		val, err := p.parseValue(0)
 		if err != nil {
 			return nil, err
 		}
-
-		// Ensure no other content follows the scalar.
 		if err := p.consumeLine(); err != nil {
 			return nil, err
 		}
-		if err := p.skipBlankLines(); err != nil {
-			return nil, err
-		}
-		if !p.done() {
-			return nil, p.errorf("unexpected content after root scalar value")
-		}
+		return p.assertRootEnd(val, "root scalar value")
 
-		return val, nil
+	default:
+		return nil, p.errorf("internal error: unknown document type")
 	}
 }
 
-// parseDict parses a multi-line dict at a given indentation level.
-func (p *parser) parseDict(indent int) (any, error) {
+// getRootType checks the current line to determine the document structure.
+// This replaces multiple lookahead helper functions with a single decisive analysis.
+func (p *parser) getRootType() dataType {
+	// Look for key-value patterns first.
+	if p.hasKeyValuePair() {
+		if p.hasInlineDictAtRoot() {
+			return typeInlineDict
+		}
+		return typeMultilineDict
+	}
+
+	// Check for empty list/dict markers.
+	if p.peekString("[]") {
+		return typeEmptyList
+	}
+	if p.peekString("{}") {
+		return typeEmptyDict
+	}
+
+	// Check for multiline list.
+	if p.peekChar(p.pos) == '-' {
+		return typeMultilineList
+	}
+
+	// Check for inline list (comma-separated values).
+	if p.hasInlineListAtRoot() {
+		return typeInlineList
+	}
+
+	return typeScalar
+}
+
+// assertRootEnd ensures no content follows a completed root element.
+func (p *parser) assertRootEnd(val any, description string) (any, error) {
+	if err := p.skipBlankLines(); err != nil {
+		return nil, err
+	}
+	if !p.done() {
+		return nil, p.errorf("unexpected content after %s", description)
+	}
+
+	return val, nil
+}
+
+// parseMultilineDict parses a multi-line dict at a given indentation level.
+func (p *parser) parseMultilineDict(indent int) (any, error) {
 	out := map[string]any{}
 	for {
 		if err := p.skipBlankLines(); err != nil {
@@ -178,7 +188,7 @@ func (p *parser) parseDict(indent int) (any, error) {
 			break
 		}
 
-		// Check if de-dented, which marks the end of the current dict.
+		// Check if de-indented, which marks the end of the current dict.
 		curIndent := p.getCurIndent()
 		if curIndent < indent {
 			break
@@ -212,11 +222,11 @@ func (p *parser) parseDict(indent int) (any, error) {
 		var val any
 		if indicator == ":" {
 			// A scalar value is on the same line as its key.
-			if err := p.expectSpace("after ':'"); err != nil {
+			if err := p.assertSpace("after ':'"); err != nil {
 				return nil, err
 			}
 
-			// Determine if a value is multi-line *before* parsing it,
+			// Determine if a value is multi-line before parsing it
 			// because the multi-line parser consumes its own newlines.
 			isMultiline := p.peekString("```") || p.peekString(`"""`)
 
@@ -272,7 +282,7 @@ func (p *parser) parseMultilineList(indent int) (any, error) {
 		}
 
 		p.advance(1)
-		p.expectSpace("after '-'")
+		p.assertSpace("after '-'")
 
 		var (
 			val any
@@ -299,6 +309,29 @@ func (p *parser) parseMultilineList(indent int) (any, error) {
 	return out, nil
 }
 
+// getMultilineVectorType determines if a block at the given indentation is a list or dict.
+// Returns true for list (starts with '-'), false for dict (starts with key).
+func (p *parser) getMultilineVectorType(indent int) (dataType, error) {
+	if err := p.skipBlankLines(); err != nil {
+		return dataType(-1), err
+	}
+	if p.done() {
+		return dataType(-1), p.errorf("ambiguous empty vector after '::'. Use [] or {}.")
+	}
+
+	curIndent := p.getCurIndent()
+	if curIndent < indent {
+		return dataType(-1), p.errorf("ambiguous empty vector after '::'. Use [] or {}.")
+	}
+
+	// The first character on the next line determines the type.
+	if p.data[p.pos] == '-' {
+		return typeMultilineList, nil
+	}
+
+	return typeMultilineDict, nil
+}
+
 // parseVector parses a vector (list or dict) after a '::' indicator.
 func (p *parser) parseVector(indent int) (any, error) {
 	// After `::`, distinguish between an inline vector and a multi-line vector.
@@ -315,31 +348,22 @@ func (p *parser) parseVector(indent int) (any, error) {
 			return nil, err
 		}
 
-		// Now, parse the block that starts on the next line.
-		if err := p.skipBlankLines(); err != nil {
+		// Now parse the block that starts on the next line using centralized detection.
+		vecType, err := p.getMultilineVectorType(indent)
+		if err != nil {
 			return nil, err
 		}
-		if p.done() {
-			return nil, p.errorf("ambiguous empty vector after '::'. Use [] or {}.")
-		}
 
-		curIndent := p.getCurIndent()
-		if curIndent < indent {
-			return nil, p.errorf("ambiguous empty vector after '::'. Use [] or {}.")
+		if vecType == typeMultilineList {
+			return p.parseMultilineList(p.getCurIndent())
 		}
-
-		// The first character on the next line determines the type.
-		if p.data[p.pos] == '-' {
-			return p.parseMultilineList(curIndent)
-		}
-
-		return p.parseDict(curIndent)
+		return p.parseMultilineDict(p.getCurIndent())
 	}
 
 	// If it's not a multi-line vector, it must be an inline one.
 	// For an inline vector, there must be exactly one space after '::'.
 	p.pos = startPos
-	if err := p.expectSpace("after '::'"); err != nil {
+	if err := p.assertSpace("after '::'"); err != nil {
 		return nil, err
 	}
 
@@ -348,7 +372,7 @@ func (p *parser) parseVector(indent int) (any, error) {
 
 // parseInlineVector parses an inline vector, which can be a list, dict, or empty marker.
 func (p *parser) parseInlineVector() (any, error) {
-	// Special markers for empty list and dict.
+	// Check for special markers for empty list and dict.
 	if p.peekString("[]") {
 		p.advance(2)
 		if err := p.consumeLine(); err != nil {
@@ -367,15 +391,59 @@ func (p *parser) parseInlineVector() (any, error) {
 
 	// To distinguish between an inline list and dict, check for a 'key:' pattern.
 	if p.hasInlineDict() {
-		return p.parseInlineDict()
+		return p.parseInlineVectorContents(typeInlineDict)
 	}
 
-	return p.parseInlineList()
+	return p.parseInlineVectorContents(typeInlineList)
 }
 
-// parseInlineList parses a comma-separated list of scalar values.
-func (p *parser) parseInlineList() (any, error) {
+// parseInlineVectorContents parses both inline lists and dicts with a unified approach.
+// The isDict parameter determines whether to parse key-value pairs (dict) or just values (list).
+func (p *parser) parseInlineVectorContents(typ dataType) (any, error) {
+	if typ == typeInlineDict {
+		res := map[string]any{}
+		_, err := p.parseInlineItems(res, func() (any, error) {
+			key, err := p.parseKey()
+			if err != nil {
+				return nil, err
+			}
+			if p.done() || p.data[p.pos] != ':' {
+				return nil, p.errorf("expected ':' in inline dict")
+			}
+
+			p.advance(1)
+			if err := p.assertSpace("in inline dict"); err != nil {
+				return nil, err
+			}
+
+			val, err := p.parseValue(0)
+			if err != nil {
+				return nil, err
+			}
+
+			res[key] = val
+			return val, nil
+		})
+
+		return res, err
+	}
+
 	var out []any
+	_, err := p.parseInlineItems(&out, func() (any, error) {
+		val, err := p.parseValue(0)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, val)
+		return val, nil
+	})
+
+	return out, err
+}
+
+// parseInlineItems contains the common logic for parsing comma-separated inline collections.
+// The itemParser function handles the specific parsing logic for each item (key-value or value).
+func (p *parser) parseInlineItems(result any, parseFunc func() (any, error)) (any, error) {
 	isFirst := true
 	for !p.done() && p.data[p.pos] != '\n' && p.data[p.pos] != '#' {
 		if !isFirst {
@@ -385,12 +453,9 @@ func (p *parser) parseInlineList() (any, error) {
 		}
 		isFirst = false
 
-		val, err := p.parseValue(0)
-		if err != nil {
+		if _, err := parseFunc(); err != nil {
 			return nil, err
 		}
-
-		out = append(out, val)
 
 		// Only skip spaces if there might be a comma following.
 		if !p.done() && p.data[p.pos] == ' ' {
@@ -411,61 +476,7 @@ func (p *parser) parseInlineList() (any, error) {
 		return nil, err
 	}
 
-	return out, nil
-}
-
-// parseInlineDict parses a comma-separated dict of scalar key-value pairs.
-func (p *parser) parseInlineDict() (any, error) {
-	res := map[string]any{}
-	isFirst := true
-	for !p.done() && p.data[p.pos] != '\n' && p.data[p.pos] != '#' {
-		if !isFirst {
-			if err := p.expectComma(); err != nil {
-				return nil, err
-			}
-		}
-		isFirst = false
-
-		key, err := p.parseKey()
-		if err != nil {
-			return nil, err
-		}
-		if p.done() || p.data[p.pos] != ':' {
-			return nil, p.errorf("expected ':' in inline dict")
-		}
-
-		p.advance(1)
-		if err := p.expectSpace("in inline dict"); err != nil {
-			return nil, err
-		}
-
-		val, err := p.parseValue(0)
-		if err != nil {
-			return nil, err
-		}
-
-		res[key] = val
-
-		// Only skip spaces if there might be a comma following
-		if !p.done() && p.data[p.pos] == ' ' {
-			nextPos := p.pos + 1
-			for nextPos < len(p.data) && p.data[nextPos] == ' ' {
-				nextPos++
-			}
-			if nextPos < len(p.data) && p.data[nextPos] == ',' {
-				p.skipSpaces()
-			} else {
-				// Don't consume spaces if they're trailing spaces at end of line
-				break
-			}
-		}
-	}
-
-	if err := p.consumeLine(); err != nil {
-		return nil, err
-	}
-
-	return res, nil
+	return result, nil
 }
 
 // parseKey parses a dict key, which can be a bare string or quoted.
@@ -538,7 +549,7 @@ func (p *parser) parseValue(keyIndent int) (any, error) {
 		}
 
 		if isDigit(p.peekChar(p.pos)) {
-			// parseNumber will handle the sign.
+			// parseNumber handles the sign.
 			p.pos--
 			return p.parseNumber()
 		}
@@ -550,7 +561,7 @@ func (p *parser) parseValue(keyIndent int) (any, error) {
 			return math.Inf(-1), nil
 		}
 		if isDigit(p.peekChar(p.pos)) {
-			// parseNumber will handle the sign.
+			// parseNumber handles the sign.
 			p.pos--
 			return p.parseNumber()
 		}
@@ -564,14 +575,15 @@ func (p *parser) parseValue(keyIndent int) (any, error) {
 
 // parseString parses a standard double-quoted string with escapes.
 func (p *parser) parseString() (string, error) {
-	// Consume the quote.
+	// Consume the opening quote.
 	p.advance(1)
 
 	var b strings.Builder
 	for !p.done() {
 		c := p.data[p.pos]
 		if c == '"' {
-			p.advance(1) // Consume trailing quote.
+			// Consume the closing quote.
+			p.advance(1)
 			return b.String(), nil
 		}
 		if c == '\n' {
@@ -623,7 +635,10 @@ func (p *parser) parseString() (string, error) {
 	return "", p.errorf("unclosed string")
 }
 
-// parseMultilineString parses ```` (preserve space) or `"""` (strip space) strings.
+// fnLineProcessor defines how to process each line of content in a multiline string.
+type fnLineProcessor func(lineContent string, lineIndent, keyIndent int) string
+
+// parseMultilineString parses both ``` (preserve space) and """ (strip space) strings.
 func (p *parser) parseMultilineString(keyIndent int, preserveSpaces bool) (string, error) {
 	delim := string(p.data[p.pos : p.pos+3])
 	p.advance(3)
@@ -633,7 +648,31 @@ func (p *parser) parseMultilineString(keyIndent int, preserveSpaces bool) (strin
 		return "", err
 	}
 
-	var builder strings.Builder
+	// Define the line processing strategy based on the string type.
+	var fn fnLineProcessor
+	if preserveSpaces {
+		// Strip the required 2-space indent relative to the key.
+		fn = func(lineContent string, lineIndent, keyIndent int) string {
+			reqIndent := keyIndent + 2
+			if len(lineContent) >= reqIndent && isSpaceString(lineContent[:reqIndent]) {
+				return lineContent[reqIndent:]
+			}
+			return lineContent
+		}
+	} else {
+		// Strip all leading and trailing whitespace from the line.
+		fn = func(lineContent string, lineIndent, keyIndent int) string {
+			return strings.TrimSpace(lineContent)
+		}
+	}
+
+	return p.parseMultilineStringContent(delim, keyIndent, fn)
+}
+
+// parseMultilineStringContent contains the common parsing logic for multiline strings.
+func (p *parser) parseMultilineStringContent(delim string, keyIndent int, processLine fnLineProcessor) (string, error) {
+	var out strings.Builder
+
 	for !p.done() {
 		lineStartPos := p.pos
 		lineIndent := 0
@@ -656,27 +695,17 @@ func (p *parser) parseMultilineString(keyIndent int, preserveSpaces bool) (strin
 			}
 
 			// Trim the final newline added by the loop.
-			return strings.TrimSuffix(builder.String(), "\n"), nil
+			return strings.TrimSuffix(out.String(), "\n"), nil
 		}
 
 		// Rewind to the start of the line to process its content.
 		p.pos = lineStartPos
 		lineContent := p.consumeLineContent()
 
-		if preserveSpaces {
-			// Strip the required 2-space indent relative to the key.
-			requiredIndent := keyIndent + 2
-			if len(lineContent) >= requiredIndent && isSpaceString(lineContent[:requiredIndent]) {
-				builder.WriteString(lineContent[requiredIndent:])
-			} else {
-				builder.WriteString(lineContent)
-			}
-		} else {
-			// Strip all leading and trailing whitespace from the line.
-			builder.WriteString(strings.TrimSpace(lineContent))
-		}
-
-		builder.WriteByte('\n')
+		// Process the line according to the string type strategy.
+		processedContent := processLine(lineContent, lineIndent, keyIndent)
+		out.WriteString(processedContent)
+		out.WriteByte('\n')
 	}
 
 	return "", p.errorf("unclosed multiline string")
@@ -776,7 +805,7 @@ func (p *parser) skipBlankLines() error {
 		lineStart := p.pos
 		p.skipSpaces()
 		if p.done() {
-			// We're at end of input after consuming spaces.
+			// Reached the end of input after consuming spaces.
 			// This is only valid if there were no spaces to consume (empty input).
 			if p.pos > lineStart {
 				return p.errorf("trailing spaces are not allowed")
@@ -789,7 +818,7 @@ func (p *parser) skipBlankLines() error {
 			return nil
 		}
 
-		// Check for trailing spaces on blank lines
+		// Check for trailing spaces on blank lines.
 		if p.data[p.pos] == '\n' && p.pos > lineStart {
 			return p.errorf("trailing spaces are not allowed")
 		}
@@ -805,7 +834,7 @@ func (p *parser) skipBlankLines() error {
 }
 
 // consumeLine validates and consumes the rest of a line.
-// It ensures there are no trailing spaces and that comments are well-formed.
+// It ensures there are no trailing spaces and that comments are well formed.
 func (p *parser) consumeLine() error {
 	contentStartPos := p.pos
 	p.skipSpaces()
@@ -864,8 +893,8 @@ func (p *parser) consumeLineContent() string {
 	return string(content)
 }
 
-// expectSpace consumes exactly one space and returns an error if not found.
-func (p *parser) expectSpace(context string) error {
+// assertSpace consumes exactly one space and returns an error if not found.
+func (p *parser) assertSpace(context string) error {
 	if p.done() || p.data[p.pos] != ' ' {
 		return p.errorf("expected single space %s", context)
 	}
@@ -890,7 +919,7 @@ func (p *parser) expectComma() error {
 	}
 	p.advance(1)
 
-	return p.expectSpace("after comma")
+	return p.assertSpace("after comma")
 }
 
 // getCurIndent calculates the indentation of the current line.
@@ -969,31 +998,33 @@ func (p *parser) hasInlineListAtRoot() bool {
 
 // hasInlineDictAtRoot checks if the document starts with an inline dict (key-value pairs with commas).
 func (p *parser) hasInlineDictAtRoot() bool {
-	// At root level, check if we have key: value, key: value pattern on same line
-	// But make sure we don't have :: at the beginning (which would be a keyed vector)
-	pos := p.pos
-	foundColon := false
-	foundComma := false
-	foundDoubleColon := false
+	// At root level, check if there is key: value, key: value pattern on same line
+	// But make sure there isn't :: at the beginning (which would be a keyed vector).
+	var (
+		pos            = p.pos
+		hasColon       = false
+		hasComma       = false
+		hasDoubleColon = false
+	)
 
 	// Check the current line for inline dict pattern
 	for pos < len(p.data) && p.data[pos] != '\n' && p.data[pos] != '#' {
 		if p.data[pos] == ':' {
 			if pos+1 < len(p.data) && p.data[pos+1] == ':' {
-				foundDoubleColon = true
+				hasDoubleColon = true
 			} else {
-				foundColon = true
+				hasColon = true
 			}
 		}
 		if p.data[pos] == ',' {
-			foundComma = true
+			hasComma = true
 		}
 		pos++
 	}
 
 	// Only consider it an inline dict if we have both : and , on the same line
 	// but NOT :: (which would be a keyed vector)
-	if !(foundColon && foundComma && !foundDoubleColon) {
+	if !(hasColon && hasComma && !hasDoubleColon) {
 		return false
 	}
 
@@ -1016,7 +1047,8 @@ func (p *parser) hasInlineDictAtRoot() bool {
 		}
 
 		if pos >= len(p.data) {
-			break // End of input
+			// EOF
+			break
 		}
 
 		if p.data[pos] == '\n' {
@@ -1036,8 +1068,8 @@ func (p *parser) hasInlineDictAtRoot() bool {
 			continue
 		}
 
-		// Found non-blank, non-comment content
-		// This means it's a multi-line dict, not an inline dict at root
+		// Found non-blank, non-comment content.
+		// This means it's a multi-line dict, not an inline dict at root.
 		return false
 	}
 
@@ -1135,6 +1167,11 @@ func (p *parser) peekChar(pos int) byte {
 		return 0
 	}
 	return p.data[pos]
+}
+
+// errorf creates a new error with the current line number.
+func (p *parser) errorf(format string, args ...any) error {
+	return fmt.Errorf("line %d: "+format, append([]any{p.line}, args...)...)
 }
 
 func main() {
