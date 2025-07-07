@@ -54,7 +54,22 @@ func (dec *Decoder) Decode(v any) error {
 	return Unmarshal(data, v)
 }
 
-// Unmarshal parses HUML data and stores the result in v.
+// Unmarshal parses HUML data and stores the result in the value pointed to by v.
+// If v is nil or not a pointer, it returns an error.
+//
+// It converts HUML data into values with the following mappings:
+//   - scalars (key: value) become primitive types:
+//   - strings for quoted strings and multiline strings
+//   - int64 for integers
+//   - float64 for floating point numbers
+//   - bool for true/false
+//   - nil for null
+//   - math.NaN() for nan
+//   - math.Inf() for inf/+inf/-inf
+//   - HUML vectors (key:: value) become []any for lists and map[string]any for dicts.
+//   - HUML documents can become any of the above types, including nil.
+//
+// If the data contains a syntax error, a parser error is returned with line number.
 func Unmarshal(data []byte, v any) error {
 	if len(data) == 0 {
 		return errors.New("empty document is undefined")
