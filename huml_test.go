@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +23,7 @@ func TestParsing(t *testing.T) {
 	f := func(name, input string, errorExpected bool) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
+			// Call Unmarshal directly.
 			t.Helper()
 			var result any
 			err := Unmarshal([]byte(input), &result)
@@ -29,6 +33,18 @@ func TestParsing(t *testing.T) {
 			if !errorExpected && err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
+
+			// Try again via the decoder.
+			var result2 any
+			decoder := NewDecoder(strings.NewReader(input))
+			err = decoder.Decode(&result2)
+			if errorExpected && err == nil {
+				t.Errorf("expected error but got none")
+			}
+			if !errorExpected && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+
 		})
 	}
 
@@ -574,4 +590,107 @@ func normalizeToJSON(data any) any {
 	default:
 		return v
 	}
+}
+
+// TestDecoderMultipleDecodes tests multiple sequential decodes.
+func TestDecoderMultipleDecodes(t *testing.T) {
+	// Test that a single decoder can only decode once (all data is consumed).
+	input := "foo: \"bar\""
+	decoder := NewDecoder(strings.NewReader(input))
+
+	var result1 any
+	if err := decoder.Decode(&result1); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	v := map[string]any{"foo": "bar"}
+	if !reflect.DeepEqual(result1, v) {
+		t.Errorf("expected %+v, got %+v", v, result1)
+	}
+
+	// Second decode should return EOF since all data was consumed.
+	var result2 any
+	if err := decoder.Decode(&result2); err == nil {
+		t.Error("expected error but got none")
+	}
+}
+
+// TestDecoderWithDifferentReaderTypes tests with various io.Reader implementations.
+func TestDecoderWithDifferentReaderTypes(t *testing.T) {
+	data := "count: 42\nactive: true"
+	v := map[string]any{"count": int64(42), "active": true}
+
+	f := func(name string, reader func() any) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			t.Helper()
+			decoder := NewDecoder(reader().(interface{ Read([]byte) (int, error) }))
+			var result any
+			if err := decoder.Decode(&result); err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(result, v) {
+				t.Errorf("expected %+v, got %+v", v, result)
+			}
+		})
+	}
+
+	f("strings.Reader", func() any { return strings.NewReader(data) })
+	f("bytes.Buffer", func() any {
+		var buf bytes.Buffer
+		buf.WriteString(data)
+		return &buf
+	})
+	f("bytes.Reader", func() any { return bytes.NewReader([]byte(data)) })
+}
+
+// TestDecoderErrorHandling tests error handling scenarios.
+func TestDecoderErrorHandling(t *testing.T) {
+	t.Run("nil dest", func(t *testing.T) {
+		decoder := NewDecoder(strings.NewReader("key: \"value\""))
+		err := decoder.Decode(nil)
+		if err == nil {
+			t.Error("expected error but got none")
+		}
+		if !strings.Contains(err.Error(), "nil value") {
+			t.Errorf("expected error to contain 'nil value', got: %v", err)
+		}
+	})
+
+	t.Run("non-pointer dest", func(t *testing.T) {
+		decoder := NewDecoder(strings.NewReader("key: \"value\""))
+
+		// Initialize with a non-nil value.
+		result := make(map[string]any)
+		err := decoder.Decode(result)
+		if err == nil {
+			t.Error("expected error but got none")
+		}
+		if !strings.Contains(err.Error(), "not a pointer") {
+			t.Errorf("expected error to contain 'not a pointer', got: %v", err)
+		}
+	})
+
+	t.Run("reader error", func(t *testing.T) {
+		// Create a reader that always returns an error.
+		decoder := NewDecoder(&errorReader{err: errors.New("reader error")})
+
+		var result any
+		err := decoder.Decode(&result)
+		if err == nil {
+			t.Error("expected error but got none")
+		}
+		if !strings.Contains(err.Error(), "reader error") {
+			t.Errorf("expected error to contain 'reader error', got: %v", err)
+		}
+	})
+}
+
+// errorReader is a helper type that always returns an error when reading
+type errorReader struct {
+	err error
+}
+
+func (e *errorReader) Read(p []byte) (n int, err error) {
+	return 0, e.err
 }
