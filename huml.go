@@ -1165,10 +1165,17 @@ func setValue(dst, src any) error {
 		return errors.New("destination pointer is nil")
 	}
 
-	var (
-		d = val.Elem()
-		s = reflect.ValueOf(src)
-	)
+	d := val.Elem()
+	return setValueReflect(d, src)
+}
+
+func setValueReflect(d reflect.Value, src any) error {
+	if src == nil {
+		d.Set(reflect.Zero(d.Type()))
+		return nil
+	}
+
+	s := reflect.ValueOf(src)
 
 	// If the destination is an interface, set it directly.
 	if d.Kind() == reflect.Interface {
@@ -1180,12 +1187,257 @@ func setValue(dst, src any) error {
 		return nil
 	}
 
+	// Direct assignment if types are compatible
 	if s.IsValid() && s.Type().AssignableTo(d.Type()) {
 		d.Set(s)
 		return nil
 	}
 
-	return fmt.Errorf("cannot assign %T to %s", src, d.Type())
+	// Handle type conversions
+	switch d.Kind() {
+	case reflect.Struct:
+		return setStruct(d, src)
+	case reflect.Slice:
+		return setSlice(d, src)
+	case reflect.Map:
+		return setMap(d, src)
+	case reflect.Ptr:
+		return setPtr(d, src)
+	case reflect.String:
+		return setString(d, src)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return setInt(d, src)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return setUint(d, src)
+	case reflect.Float32, reflect.Float64:
+		return setFloat(d, src)
+	case reflect.Bool:
+		return setBool(d, src)
+	default:
+		return fmt.Errorf("cannot unmarshal %T into %s", src, d.Type())
+	}
+}
+
+// setStruct unmarshals a map into a struct.
+func setStruct(d reflect.Value, src any) error {
+	srcMap, ok := src.(map[string]any)
+	if !ok {
+		return fmt.Errorf("cannot unmarshal %T into struct", src)
+	}
+
+	structType := d.Type()
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		fieldValue := d.Field(i)
+
+		// Skip unexported fields.
+		if !fieldValue.CanSet() {
+			continue
+		}
+
+		// Get the field name for mapping.
+		fieldName := getFieldName(field)
+		if fieldName == "-" {
+			continue
+		}
+
+		// Look for the value in the source map.
+		if srcValue, exists := srcMap[fieldName]; exists {
+			if err := setValueReflect(fieldValue, srcValue); err != nil {
+				return fmt.Errorf("error setting field %s: %w", field.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// getFieldName returns the field name to use for mapping, checking for struct tags
+func getFieldName(field reflect.StructField) string {
+	if tag := field.Tag.Get("huml"); tag != "" {
+		if tag == "-" {
+			return "-"
+		}
+
+		// Handle comma-separated options (name,omitempty)
+		parts := strings.Split(tag, ",")
+		return parts[0]
+	}
+
+	// Default to field name.
+	return field.Name
+}
+
+// setSlice unmarshals an array into a slice.
+func setSlice(d reflect.Value, src any) error {
+	srcSlice, ok := src.([]any)
+	if !ok {
+		return fmt.Errorf("cannot unmarshal %T into slice", src)
+	}
+
+	sliceType := d.Type()
+
+	// Create a new slice with the right capacity.
+	newSlice := reflect.MakeSlice(sliceType, len(srcSlice), len(srcSlice))
+
+	for i, srcElem := range srcSlice {
+		elemValue := newSlice.Index(i)
+		if err := setValueReflect(elemValue, srcElem); err != nil {
+			return fmt.Errorf("error setting slice element %d: %w", i, err)
+		}
+	}
+
+	d.Set(newSlice)
+	return nil
+}
+
+// setMap unmarshals a src map into a dest map.
+func setMap(d reflect.Value, src any) error {
+	srcMap, ok := src.(map[string]any)
+	if !ok {
+		return fmt.Errorf("cannot unmarshal %T into map", src)
+	}
+
+	mapType := d.Type()
+	keyType := mapType.Key()
+	valueType := mapType.Elem()
+
+	// Only support string keys for now (like JSON).
+	if keyType.Kind() != reflect.String {
+		return fmt.Errorf("maps with non-string keys are not supported")
+	}
+
+	newMap := reflect.MakeMap(mapType)
+	for key, srcValue := range srcMap {
+		keyValue := reflect.ValueOf(key)
+		valueValue := reflect.New(valueType).Elem()
+
+		if err := setValueReflect(valueValue, srcValue); err != nil {
+			return fmt.Errorf("error setting map value for key %s: %w", key, err)
+		}
+
+		newMap.SetMapIndex(keyValue, valueValue)
+	}
+
+	d.Set(newMap)
+	return nil
+}
+
+// setPtr unmarshals into a pointer.
+func setPtr(d reflect.Value, src any) error {
+	if src == nil {
+		d.Set(reflect.Zero(d.Type()))
+		return nil
+	}
+
+	elemType := d.Type().Elem()
+	newPtr := reflect.New(elemType)
+
+	if err := setValueReflect(newPtr.Elem(), src); err != nil {
+		return err
+	}
+
+	d.Set(newPtr)
+	return nil
+}
+
+// setString converts various types to string.
+func setString(d reflect.Value, src any) error {
+	switch v := src.(type) {
+	case string:
+		d.SetString(v)
+		return nil
+	default:
+		return fmt.Errorf("cannot unmarshal %T into string", src)
+	}
+}
+
+// setInt converts various numeric types to int.
+func setInt(d reflect.Value, src any) error {
+	switch v := src.(type) {
+	case int64:
+		if d.OverflowInt(v) {
+			return fmt.Errorf("value %d overflows %s", v, d.Type())
+		}
+		d.SetInt(v)
+		return nil
+	case float64:
+		// Convert float to int if it's a whole number.
+		if v != math.Trunc(v) {
+			return fmt.Errorf("cannot unmarshal float %g into integer type", v)
+		}
+		intVal := int64(v)
+		if d.OverflowInt(intVal) {
+			return fmt.Errorf("value %g overflows %s", v, d.Type())
+		}
+		d.SetInt(intVal)
+		return nil
+	default:
+		return fmt.Errorf("cannot unmarshal %T into integer", src)
+	}
+}
+
+// setUint converts various numeric types to uint.
+func setUint(d reflect.Value, src any) error {
+	switch v := src.(type) {
+	case int64:
+		if v < 0 {
+			return fmt.Errorf("cannot unmarshal negative value %d into unsigned integer", v)
+		}
+		uintVal := uint64(v)
+		if d.OverflowUint(uintVal) {
+			return fmt.Errorf("value %d overflows %s", v, d.Type())
+		}
+		d.SetUint(uintVal)
+		return nil
+	case float64:
+		if v < 0 {
+			return fmt.Errorf("cannot unmarshal negative value %g into unsigned integer", v)
+		}
+		if v != math.Trunc(v) {
+			return fmt.Errorf("cannot unmarshal float %g into integer type", v)
+		}
+		uintVal := uint64(v)
+		if d.OverflowUint(uintVal) {
+			return fmt.Errorf("value %g overflows %s", v, d.Type())
+		}
+		d.SetUint(uintVal)
+		return nil
+	default:
+		return fmt.Errorf("cannot unmarshal %T into unsigned integer", src)
+	}
+}
+
+// setFloat converts various numeric types to float.
+func setFloat(d reflect.Value, src any) error {
+	switch v := src.(type) {
+	case int64:
+		floatVal := float64(v)
+		if d.OverflowFloat(floatVal) {
+			return fmt.Errorf("value %d overflows %s", v, d.Type())
+		}
+		d.SetFloat(floatVal)
+		return nil
+	case float64:
+		if d.OverflowFloat(v) {
+			return fmt.Errorf("value %g overflows %s", v, d.Type())
+		}
+		d.SetFloat(v)
+		return nil
+	default:
+		return fmt.Errorf("cannot unmarshal %T into float", src)
+	}
+}
+
+// setBool converts various types to bool.
+func setBool(d reflect.Value, src any) error {
+	switch v := src.(type) {
+	case bool:
+		d.SetBool(v)
+		return nil
+	default:
+		return fmt.Errorf("cannot unmarshal %T into bool", src)
+	}
 }
 
 func isDigit(c byte) bool {
