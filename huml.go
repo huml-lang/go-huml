@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -29,6 +30,28 @@ type parser struct {
 	data []byte // The input HUML data.
 	pos  int    // The current position in the data.
 	line int    // The current line number, for error reporting.
+}
+
+// Decoder reads and decodes HUML values from an input stream.
+type Decoder struct {
+	r io.Reader
+}
+
+// NewDecoder returns a new decoder that reads from r.
+func NewDecoder(r io.Reader) *Decoder {
+	return &Decoder{r: r}
+}
+
+// Decode reads all data from the input stream and decodes it into the provided value v.
+// It does not actually decode the stream in chunks on the fly. That is a future
+// enhancement.
+func (dec *Decoder) Decode(v any) error {
+	data, err := io.ReadAll(dec.r)
+	if err != nil {
+		return err
+	}
+
+	return Unmarshal(data, v)
 }
 
 // Unmarshal parses HUML data and stores the result in v.
