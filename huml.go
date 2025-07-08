@@ -1500,6 +1500,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	newHuml, err := Marshal(result)
+	if err != nil {
+		log.Fatalf("Error marshalling to HUML: %v", err)
+	}
+	fmt.Println(string(newHuml))
+	return
+
 	b, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		log.Fatalf("Error marshalling to JSON: %v", err)
