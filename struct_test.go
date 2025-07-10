@@ -164,12 +164,12 @@ type Doc struct {
 func TestStruct(t *testing.T) {
 	// Scan HUML to struct.
 	var resHuml Doc
-	b, err := os.ReadFile("test.huml")
+	b, err := os.ReadFile("tests/documents/mixed.huml")
 	if err != nil {
-		t.Fatalf("failed to read test.huml: %v", err)
+		t.Fatalf("failed to read tests/documents/mixed.huml: %v", err)
 	}
 	if err := Unmarshal(b, &resHuml); err != nil {
-		t.Fatalf("failed to unmarshal test.huml: %v", err)
+		t.Fatalf("failed to unmarshal tests/documents/mixed.huml: %v", err)
 	}
 
 	// Convert it to JSON and back to struct so that the int/float
@@ -187,14 +187,14 @@ func TestStruct(t *testing.T) {
 
 	// Read JSON file.
 	var resJson Doc
-	b, err = os.ReadFile("test.json")
+	b, err = os.ReadFile("tests/documents/mixed.json")
 	if err != nil {
-		t.Fatalf("failed to read test.json: %v", err)
+		t.Fatalf("failed to read tests/documents/mixed.json: %v", err)
 	}
 	if err := json.Unmarshal(b, &resJson); err != nil {
-		t.Fatalf("failed to unmarshal test.json: %v", err)
+		t.Fatalf("failed to unmarshal tests/documents/mixed.json: %v", err)
 	}
 
 	// Deep-compare both.
-	assert.Equal(t, resJson, resJsonConverted, "test.huml and test.json should be deeply equal")
+	assert.Equal(t, resJson, resJsonConverted, "tests/documents/mixed.huml and tests/documents/mixed.json should be deeply equal")
 }

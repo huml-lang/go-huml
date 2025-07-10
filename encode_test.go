@@ -11,12 +11,12 @@ import (
 func TestEncodeDoc(t *testing.T) {
 	// Scan source data as HUML.
 	var resHuml map[string]any
-	b, err := os.ReadFile("test.huml")
+	b, err := os.ReadFile("tests/documents/mixed.huml")
 	if err != nil {
-		t.Fatalf("failed to read test.huml: %v", err)
+		t.Fatalf("failed to read tests/documents/mixed.huml: %v", err)
 	}
 	if err := Unmarshal(b, &resHuml); err != nil {
-		t.Fatalf("failed to unmarshal test.huml: %v", err)
+		t.Fatalf("failed to unmarshal mixed.huml: %v", err)
 	}
 
 	// Marshal it back to HUML.
@@ -34,14 +34,14 @@ func TestEncodeDoc(t *testing.T) {
 
 	// Read test.json and unmarshal it.
 	var resJson map[string]any
-	b, err = os.ReadFile("test.json")
+	b, err = os.ReadFile("tests/documents/mixed.json")
 	if err != nil {
-		t.Fatalf("failed to read test.json: %v", err)
+		t.Fatalf("failed to read tests/documents/mixed.json: %v", err)
 	}
 	if err := json.Unmarshal(b, &resJson); err != nil {
-		t.Fatalf("failed to unmarshal test.json: %v", err)
+		t.Fatalf("failed to unmarshal tests/documents/mixed.json: %v", err)
 	}
 
 	// Deep-compare both.
-	assert.Equal(t, out, resJson, "test.huml and test.json should be deeply equal")
+	assert.Equal(t, out, resJson, "test.huml and tests/documents/mixed.json should be deeply equal")
 }

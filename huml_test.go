@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,11 +13,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-)
-
-var (
-	//go:embed test.huml
-	efs embed.FS
 )
 
 func TestAssertions(t *testing.T) {
@@ -58,7 +52,7 @@ func TestAssertions(t *testing.T) {
 		Error bool   `json:"error"`
 	}
 
-	err := filepath.Walk("./tests", func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk("./tests/assertions", func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() || !strings.HasSuffix(info.Name(), ".json") {
 			return nil
 		}
@@ -285,31 +279,44 @@ func FuzzParsing(f *testing.F) {
 	})
 }
 
-// TestDeepEqual reads test.huml and test.json, unmarshals them, and compares the results.
-func TestDeepEqual(t *testing.T) {
-	// Read test.huml and unmarshal it.
-	var resHuml map[string]any
-	b, err := os.ReadFile("test.huml")
+// TestDocuments reads fully formed HUML documents from tests/documents/*.huml files,
+// and compares them against their corresponding JSON files (with the same name but .json extension).
+func TestDocuments(t *testing.T) {
+	// Globs tests/documents/*.huml file, and for each file, read the corresponding $name.json file also.
+	files, err := filepath.Glob("tests/documents/*.huml")
 	if err != nil {
-		t.Fatalf("failed to read test.huml: %v", err)
-	}
-	if err := Unmarshal(b, &resHuml); err != nil {
-		t.Fatalf("failed to unmarshal test.huml: %v", err)
-	}
-	out := normalizeToJSON(resHuml)
-
-	// Read test.json and unmarshal it.
-	var resJson map[string]any
-	b, err = os.ReadFile("test.json")
-	if err != nil {
-		t.Fatalf("failed to read test.json: %v", err)
-	}
-	if err := json.Unmarshal(b, &resJson); err != nil {
-		t.Fatalf("failed to unmarshal test.json: %v", err)
+		t.Fatalf("failed to glob documents/huml files: %v", err)
 	}
 
-	// Deep-compare both.
-	assert.Equal(t, out, resJson, "test.huml and test.json should be deeply equal")
+	if len(files) < 1 {
+		t.Fatalf("expected at least 1 huml file in tests/documents, found %d", len(files))
+	}
+
+	for _, path := range files {
+		// Read test.huml and unmarshal it.
+		var resHuml map[string]any
+		b, err := os.ReadFile("tests/documents/mixed.huml")
+		if err != nil {
+			t.Fatalf("failed to read test.huml: %v", err)
+		}
+		if err := Unmarshal(b, &resHuml); err != nil {
+			t.Fatalf("failed to unmarshal test.huml: %v", err)
+		}
+		out := normalizeToJSON(resHuml)
+
+		// Read the corresponding JSON file.
+		var resJson map[string]any
+		b, err = os.ReadFile(strings.TrimSuffix(path, ".huml") + ".json")
+		if err != nil {
+			t.Fatalf("failed to read test.json: %v", err)
+		}
+		if err := json.Unmarshal(b, &resJson); err != nil {
+			t.Fatalf("failed to unmarshal test.json: %v", err)
+
+		}
+		// Deep-compare both.
+		assert.Equal(t, out, resJson, "test.huml and test.json should be deeply equal")
+	}
 }
 
 func BenchmarkParseHUML(b *testing.B) {
