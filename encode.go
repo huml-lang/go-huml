@@ -14,11 +14,6 @@ import (
 	"sync"
 )
 
-// A regular expression to check if a key is a "bare" key, meaning it doesn't
-// require quoting. According to the spec, this includes alphanumeric characters,
-// underscores, and hyphens.
-var bareKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-
 // Marshal returns the HUML encoding of v.
 //
 // This function works like json.Marshal, converting a Go value into a HUML
@@ -44,6 +39,7 @@ func Marshal(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := NewEncoder(&buf)
 	// The HUML specification indicates that an optional version directive can be at the top.
+	// We will add this by default for clarity and compliance.
 	if _, err := buf.WriteString("%HUML v0.1.0\n"); err != nil {
 		return nil, err
 	}
@@ -123,7 +119,7 @@ func (s *state) marshalValue(v reflect.Value, indent int) {
 	}
 
 	// Follow pointers and interfaces to find the concrete value.
-	// On encountering a nil pointer along the way, it represents a null value.
+	// If we encounter a nil pointer along the way, it represents a null value.
 	v = indirect(v, &s.err)
 	if s.err != nil {
 		return
@@ -163,7 +159,7 @@ func (s *state) marshalValue(v reflect.Value, indent int) {
 	case reflect.Bool:
 		s.write(strconv.FormatBool(v.Bool()))
 	default:
-		// Any type that's not explicitly handled is unsupported.
+		// Any type we don't explicitly handle is unsupported.
 		s.err = fmt.Errorf("huml: unsupported type: %s", v.Type())
 	}
 }
@@ -288,23 +284,27 @@ func (s *state) marshalSlice(v reflect.Value, indent int) {
 // marshalString handles both single-line and multi-line strings.
 func (s *state) marshalString(str string, indent int) {
 	// If a string contains a newline, it must be formatted as a multi-line string.
-	// Use ``` to preserve all whitespace as per the spec.
+	// We use ``` to preserve all whitespace as per the spec.
 	if strings.Contains(str, "\n") {
+		// The `indent` passed here is the indentation for the value, which is key_indent + 2.
+		// The content of the multi-line string must be at key_indent + 2.
+		// The closing delimiter must be at key_indent.
+		keyIndent := indent - 2
+		contentIndent := indent
+
 		s.write("```\n")
 		lines := strings.Split(str, "\n")
 		// The last line of a multi-line string from split can be empty if the string ends with a newline.
-		// Trim this to avoid an extra trailing newline inside the HUML block.
+		// We trim this to avoid an extra trailing newline inside the HUML block.
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
 			lines = lines[:len(lines)-1]
 		}
-
 		for _, line := range lines {
-			s.write(strings.Repeat(" ", indent+2))
+			s.write(strings.Repeat(" ", contentIndent))
 			s.write(line)
 			s.write("\n")
 		}
-
-		s.write(strings.Repeat(" ", indent))
+		s.write(strings.Repeat(" ", keyIndent))
 		s.write("```")
 	} else {
 		// Standard Go quoting handles all necessary escapes for a valid HUML string.
@@ -336,8 +336,8 @@ func (s *state) writeKVPair(key string, val reflect.Value, indent int) {
 	if s.err != nil {
 		return
 	}
-
 	valKind := iVal.Kind()
+
 	isVector := valKind == reflect.Map || valKind == reflect.Struct || valKind == reflect.Slice || valKind == reflect.Array
 
 	if isVector {
@@ -369,13 +369,17 @@ func (s *state) writeKVPair(key string, val reflect.Value, indent int) {
 	s.marshalValue(val, indent+2)
 }
 
+// A regular expression to check if a key is a "bare" key, meaning it doesn't
+// require quoting. According to the spec, it must start with a letter and
+// can be followed by alphanumeric characters, underscores, and hyphens.
+var bareKeyRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
+
 // quoteKeyIfNeeded wraps a key in quotes if it contains characters that are
 // not allowed in a bare key.
 func quoteKeyIfNeeded(key string) string {
 	if bareKeyRegex.MatchString(key) {
 		return key
 	}
-
 	return strconv.Quote(key)
 }
 
@@ -399,8 +403,7 @@ func indirect(v reflect.Value, err *error) reflect.Value {
 		}
 		v = v.Elem()
 	}
-
-	// Loop limit hit, the structure is too deep or cyclical.
+	// If we hit the loop limit, the structure is too deep or cyclical.
 	*err = fmt.Errorf("huml: encountered a circular or excessively deep data structure")
 	return reflect.Value{}
 }
