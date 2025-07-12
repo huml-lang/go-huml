@@ -1,13 +1,10 @@
-package main
+package huml
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
-	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -1482,35 +1479,4 @@ func (p *parser) peekChar(pos int) byte {
 // errorf creates a new error with the current line number.
 func (p *parser) errorf(format string, args ...any) error {
 	return fmt.Errorf("line %d: "+format, append([]any{p.line}, args...)...)
-}
-
-func main() {
-	if len(os.Args) != 2 {
-		fmt.Println("Usage: huml <filename>")
-		os.Exit(1)
-	}
-	raw, err := os.ReadFile(os.Args[1])
-	if err != nil {
-		log.Fatalf("Error reading file: %v", err)
-	}
-
-	var result any
-	if err := Unmarshal(raw, &result); err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	newHuml, err := Marshal(result)
-	if err != nil {
-		log.Fatalf("Error marshalling to HUML: %v", err)
-	}
-	fmt.Println(string(newHuml))
-	return
-
-	b, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		log.Fatalf("Error marshalling to JSON: %v", err)
-	}
-
-	fmt.Println(string(b))
 }

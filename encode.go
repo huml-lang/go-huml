@@ -1,5 +1,6 @@
-// Package huml provides functionality for marshalling and unmarshalling HUML data.
-package main
+// Package huml provides functionality for parsing, encoding and decoding
+// HUML (Human-Oriented Markup Language) documents.
+package huml
 
 import (
 	"bytes"
