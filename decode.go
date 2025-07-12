@@ -119,9 +119,9 @@ func (p *parser) parse() (any, error) {
 		return nil, err
 	}
 
-	// If the document is empty or only contains comments, it's an empty dict.
+	// If the document is empty or only contains comments, it's undefined.
 	if p.done() {
-		return map[string]any{}, nil
+		return nil, p.errorf("empty document is undefined")
 	}
 
 	// Root element must not be indented.
