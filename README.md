@@ -40,7 +40,7 @@ import (
 
 func main() {
 	res, err := Marshal(stuff);
-    if err != nil {
+	if err != nil {
 		panic(err)
 	}
 
