@@ -652,30 +652,16 @@ func (p *parser) parseString() (string, error) {
 			switch esc := p.data[p.pos]; esc {
 			case '"', '\\', '/':
 				b.WriteByte(esc)
-			case 'n':
-				b.WriteByte('\n')
-			case 't':
-				b.WriteByte('\t')
-			case 'r':
-				b.WriteByte('\r')
-			case 'b':
-				b.WriteByte('\b')
 			case 'f':
 				b.WriteByte('\f')
-			case 'u':
-				// Handle a 4-hex-digit Unicode escape sequence.
-				if p.pos+4 >= len(p.data) {
-					return "", p.errorf("incomplete unicode escape sequence \\u")
-				}
-				hex := p.data[p.pos+1 : p.pos+5]
-				code, err := strconv.ParseUint(string(hex), 16, 32)
-				if err != nil {
-					return "", p.errorf("invalid unicode escape sequence \\u%s", string(hex))
-				}
-				b.WriteRune(rune(code))
-
-				// Consume the 4 hex digits.
-				p.advance(4)
+			case 'n':
+				b.WriteByte('\n')
+			case 'r':
+				b.WriteByte('\r')
+			case 't':
+				b.WriteByte('\t')
+			case 'v':
+				b.WriteByte('\v')
 			default:
 				return "", p.errorf("invalid escape character '\\%c'", esc)
 			}
