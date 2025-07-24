@@ -48,4 +48,14 @@ func main() {
 }
 ```
 
+## Development Setup
+
+This project uses git submodules for test data. After cloning the repository, initialize the submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+This will pull the test cases from the `huml-lang/tests` repository into the `tests/` directory.
+
 MIT License

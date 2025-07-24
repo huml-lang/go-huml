@@ -52,6 +52,11 @@ func TestAssertions(t *testing.T) {
 		Error bool   `json:"error"`
 	}
 
+	// Check if the tests/assertions directory exists
+	if _, err := os.Stat("./tests/assertions"); os.IsNotExist(err) {
+		t.Fatalf("tests/assertions directory not found. Please run 'git submodule update --init --recursive' to initialize test data. See README for development setup instructions.")
+	}
+
 	err := filepath.Walk("./tests/assertions", func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() || !strings.HasSuffix(info.Name(), ".json") {
 			return nil
