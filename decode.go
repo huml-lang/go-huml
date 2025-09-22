@@ -453,7 +453,7 @@ func (p *parser) parseInlineVector() (any, error) {
 }
 
 // parseInlineVectorContents parses both inline lists and dicts with a unified approach.
-// The isDict parameter determines whether to parse key-value pairs (dict) or just values (list).
+// The typ parameter determines whether to parse key-value pairs (dict) or just values (list).
 func (p *parser) parseInlineVectorContents(typ dataType) (any, error) {
 	if typ == typeInlineDict {
 		res := map[string]any{}
@@ -464,6 +464,9 @@ func (p *parser) parseInlineVectorContents(typ dataType) (any, error) {
 			}
 			if p.done() || p.data[p.pos] != ':' {
 				return nil, p.errorf("expected ':' in inline dict")
+			}
+			if _, exists := out[key]; exists {
+				return nil, p.errorf("duplicate key '%s' in dict", key)
 			}
 
 			p.advance(1)
