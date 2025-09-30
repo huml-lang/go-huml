@@ -458,6 +458,9 @@ func (p *parser) parseInlineVectorContents(typ dataType) (any, error) {
 	if typ == typeInlineDict {
 		res := map[string]any{}
 		_, err := p.parseInlineItems(res, func() (any, error) {
+			if !p.isKeyStart() {
+				return nil, p.errorf("invalid character '%c', expected key", p.data[p.pos])
+			}
 			key, err := p.parseKey()
 			if err != nil {
 				return nil, err
