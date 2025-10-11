@@ -410,9 +410,9 @@ func (p *parser) parseVector(indent int) (any, error) {
 		}
 
 		if vecType == typeMultilineList {
-			return p.parseMultilineList(p.getCurIndent())
+			return p.parseMultilineList(indent)
 		}
-		return p.parseMultilineDict(p.getCurIndent())
+		return p.parseMultilineDict(indent)
 	}
 
 	// If it's not a multi-line vector, it must be an inline one.
