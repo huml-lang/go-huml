@@ -465,7 +465,7 @@ func (p *parser) parseInlineVectorContents(typ dataType) (any, error) {
 			if p.done() || p.data[p.pos] != ':' {
 				return nil, p.errorf("expected ':' in inline dict")
 			}
-			if _, exists := out[key]; exists {
+			if _, exists := res[key]; exists {
 				return nil, p.errorf("duplicate key '%s' in dict", key)
 			}
 
