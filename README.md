@@ -18,12 +18,19 @@ import (
 )
 
 func main() {
-	var result map[string]any
-	if err := Unmarshal([]byte(doc), &result); err != nil {
-		panic(err)
-	}
+    doc := `
+name: "Alice"
+age: 30
+active: true
+`
+    var result map[string]any
+    if err := huml.Unmarshal([]byte(doc), &result); err != nil {
+        panic(err)
+    }
 
-	fmt.Println(v)
+    fmt.Println(result["name"])   // Alice
+    fmt.Println(result["age"])    // 30
+    fmt.Println(result["active"]) // true
 }
 ```
 
@@ -39,14 +46,27 @@ import (
 )
 
 func main() {
-	res, err := Marshal(stuff);
-	if err != nil {
-		panic(err)
-	}
+    data := map[string]any{
+        "name":   "Alice",
+        "age":    30,
+        "active": true,
+    }
 
-	fmt.Println(string(res))
+    res, err := huml.Marshal(data)
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Println(string(res))
+    // Output:
+    // %HUML v0.1.0
+    // active: true
+    // age: 30
+    // name: "Alice"
 }
 ```
+
+See the [package documentation](https://pkg.go.dev/github.com/huml-lang/go-huml) for more examples and API reference.
 
 ## Development Setup
 
