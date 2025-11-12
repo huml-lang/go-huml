@@ -410,9 +410,9 @@ func (p *parser) parseVector(indent int) (any, error) {
 		}
 
 		if vecType == typeMultilineList {
-			return p.parseMultilineList(p.getCurIndent())
+			return p.parseMultilineList(indent)
 		}
-		return p.parseMultilineDict(p.getCurIndent())
+		return p.parseMultilineDict(indent)
 	}
 
 	// If it's not a multi-line vector, it must be an inline one.
@@ -465,7 +465,7 @@ func (p *parser) parseInlineVectorContents(typ dataType) (any, error) {
 			if p.done() || p.data[p.pos] != ':' {
 				return nil, p.errorf("expected ':' in inline dict")
 			}
-			if _, exists := out[key]; exists {
+			if _, exists := res[key]; exists {
 				return nil, p.errorf("duplicate key '%s' in dict", key)
 			}
 
