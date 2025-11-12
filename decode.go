@@ -1241,20 +1241,15 @@ func setStruct(d reflect.Value, src any) error {
 	return nil
 }
 
-// getFieldName returns the field name to use for mapping, checking for struct tags
+// getFieldName returns the field name to use for mapping, checking for struct tags.
+// It uses the shared parseStructTag function for consistency with encoding.
+// Note: omitempty is only relevant for encoding, so we ignore it here.
 func getFieldName(field reflect.StructField) string {
-	if tag := field.Tag.Get("huml"); tag != "" {
-		if tag == "-" {
-			return "-"
-		}
-
-		// Handle comma-separated options (name,omitempty)
-		parts := strings.Split(tag, ",")
-		return parts[0]
+	name, _ := parseStructTag(field.Tag)
+	if name == "" {
+		return field.Name
 	}
-
-	// Default to field name.
-	return field.Name
+	return name
 }
 
 // setSlice unmarshals an array into a slice.

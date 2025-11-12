@@ -198,3 +198,277 @@ func TestStruct(t *testing.T) {
 	// Deep-compare both.
 	assert.Equal(t, resJson, resJsonConverted, "tests/documents/mixed.huml and tests/documents/mixed.json should be deeply equal")
 }
+
+// TestStructTags tests the struct tag functionality including renaming, omitempty, and skipping.
+func TestStructTags(t *testing.T) {
+	t.Run("field_renaming", func(t *testing.T) {
+		type TestStruct struct {
+			FieldName    string `huml:"custom_name"`
+			AnotherField int    `huml:"another_custom"`
+		}
+
+		data := TestStruct{
+			FieldName:    "value1",
+			AnotherField: 42,
+		}
+
+		marshalled, err := Marshal(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		humlStr := string(marshalled)
+		// Check that custom names are used
+		assert.Contains(t, humlStr, "custom_name")
+		assert.Contains(t, humlStr, "another_custom")
+		// Check that original names are NOT used
+		assert.NotContains(t, humlStr, "FieldName")
+		assert.NotContains(t, humlStr, "AnotherField")
+	})
+
+	t.Run("omitempty_with_zero_values", func(t *testing.T) {
+		type TestStruct struct {
+			IncludedString string `huml:"included_string"`
+			OmittedString  string `huml:"omitted_string,omitempty"`
+			OmittedInt     int    `huml:"omitted_int,omitempty"`
+			OmittedBool    bool   `huml:"omitted_bool,omitempty"`
+			IncludedInt    int    `huml:"included_int"`
+			IncludedBool   bool   `huml:"included_bool"`
+		}
+
+		data := TestStruct{
+			IncludedString: "present",
+			OmittedString:  "",    // empty - should be omitted
+			OmittedInt:     0,     // zero - should be omitted
+			OmittedBool:    false, // false - should be omitted
+			IncludedInt:    0,     // zero but no omitempty - should be included
+			IncludedBool:   false, // false but no omitempty - should be included
+		}
+
+		marshalled, err := Marshal(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		humlStr := string(marshalled)
+		// Check that included fields are present
+		assert.Contains(t, humlStr, "included_string")
+		assert.Contains(t, humlStr, "included_int")
+		assert.Contains(t, humlStr, "included_bool")
+		// Check that omitted fields are NOT present
+		assert.NotContains(t, humlStr, "omitted_string")
+		assert.NotContains(t, humlStr, "omitted_int")
+		assert.NotContains(t, humlStr, "omitted_bool")
+	})
+
+	t.Run("omitempty_with_non_zero_values", func(t *testing.T) {
+		type TestStruct struct {
+			IncludedString string `huml:"included_string,omitempty"`
+			IncludedInt    int    `huml:"included_int,omitempty"`
+			IncludedBool   bool   `huml:"included_bool,omitempty"`
+		}
+
+		data := TestStruct{
+			IncludedString: "present",
+			IncludedInt:    42,
+			IncludedBool:   true,
+		}
+
+		marshalled, err := Marshal(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		humlStr := string(marshalled)
+		// All fields have non-zero values, so they should all be included
+		assert.Contains(t, humlStr, "included_string")
+		assert.Contains(t, humlStr, "included_int")
+		assert.Contains(t, humlStr, "included_bool")
+	})
+
+	t.Run("skip_field_with_dash", func(t *testing.T) {
+		type TestStruct struct {
+			IncludedField string `huml:"included"`
+			SkippedField  string `huml:"-"`
+			AnotherField  int    `huml:"another"`
+		}
+
+		data := TestStruct{
+			IncludedField: "value1",
+			SkippedField:  "should not appear",
+			AnotherField:  42,
+		}
+
+		marshalled, err := Marshal(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		humlStr := string(marshalled)
+		// Check that included fields are present
+		assert.Contains(t, humlStr, "included")
+		assert.Contains(t, humlStr, "another")
+		// Check that skipped field is NOT present
+		assert.NotContains(t, humlStr, "SkippedField")
+		assert.NotContains(t, humlStr, "should not appear")
+	})
+
+	t.Run("omitempty_with_slices_and_maps", func(t *testing.T) {
+		type TestStruct struct {
+			EmptySlice    []string          `huml:"empty_slice,omitempty"`
+			NonEmptySlice []string          `huml:"non_empty_slice,omitempty"`
+			EmptyMap      map[string]string `huml:"empty_map,omitempty"`
+			NonEmptyMap   map[string]string `huml:"non_empty_map,omitempty"`
+		}
+
+		data := TestStruct{
+			EmptySlice:    []string{},
+			NonEmptySlice: []string{"item1", "item2"},
+			EmptyMap:      map[string]string{},
+			NonEmptyMap:   map[string]string{"key": "value"},
+		}
+
+		marshalled, err := Marshal(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		humlStr := string(marshalled)
+		// Empty collections should be omitted (check for exact field names as keys)
+		// Use word boundary to avoid matching substrings like "non_empty_slice"
+		assert.NotRegexp(t, `(^|\n)\s*empty_slice\s*::`, humlStr)
+		assert.NotRegexp(t, `(^|\n)\s*empty_map\s*::`, humlStr)
+		// Non-empty collections should be included
+		assert.Contains(t, humlStr, "non_empty_slice")
+		assert.Contains(t, humlStr, "non_empty_map")
+	})
+
+	t.Run("omitempty_with_pointers", func(t *testing.T) {
+		type TestStruct struct {
+			NilPtr       *string `huml:"nil_ptr,omitempty"`
+			NonNilPtr    *string `huml:"non_nil_ptr,omitempty"`
+			NilPtrNoOmit *string `huml:"nil_ptr_no_omit"`
+		}
+
+		strValue := "value"
+		data := TestStruct{
+			NilPtr:       nil,
+			NonNilPtr:    &strValue,
+			NilPtrNoOmit: nil,
+		}
+
+		marshalled, err := Marshal(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		humlStr := string(marshalled)
+		// Nil pointer with omitempty should be omitted (check for exact field name as key)
+		assert.NotRegexp(t, `(^|\n)\s*nil_ptr\s*:`, humlStr)
+		// Non-nil pointer should be included
+		assert.Contains(t, humlStr, "non_nil_ptr")
+		// Nil pointer without omitempty should be included as null
+		assert.Contains(t, humlStr, "nil_ptr_no_omit")
+		assert.Contains(t, humlStr, "null")
+	})
+
+	t.Run("omitempty_with_nested_structs", func(t *testing.T) {
+		type Nested struct {
+			Value string `huml:"value"`
+		}
+		type TestStruct struct {
+			EmptyNested    Nested `huml:"empty_nested,omitempty"`
+			NonEmptyNested Nested `huml:"non_empty_nested,omitempty"`
+		}
+
+		data := TestStruct{
+			EmptyNested:    Nested{Value: ""},
+			NonEmptyNested: Nested{Value: "present"},
+		}
+
+		marshalled, err := Marshal(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		humlStr := string(marshalled)
+		// Empty nested struct should be omitted (check for exact field name as key)
+		assert.NotRegexp(t, `(^|\n)\s*empty_nested\s*::`, humlStr)
+		// Non-empty nested struct should be included
+		assert.Contains(t, humlStr, "non_empty_nested")
+		assert.Contains(t, humlStr, "present")
+	})
+
+	t.Run("decode_with_renamed_fields", func(t *testing.T) {
+		type TestStruct struct {
+			FieldName    string `huml:"custom_name"`
+			AnotherField int    `huml:"another_custom"`
+		}
+
+		humlData := `custom_name: "value1"
+another_custom: 42`
+
+		var result TestStruct
+		err := Unmarshal([]byte(humlData), &result)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		assert.Equal(t, "value1", result.FieldName)
+		assert.Equal(t, 42, result.AnotherField)
+	})
+
+	t.Run("decode_with_skipped_fields", func(t *testing.T) {
+		type TestStruct struct {
+			IncludedField string `huml:"included"`
+			SkippedField  string `huml:"-"`
+		}
+
+		// HUML data doesn't have the skipped field, which is fine
+		humlData := `included: "value"`
+
+		var result TestStruct
+		err := Unmarshal([]byte(humlData), &result)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		assert.Equal(t, "value", result.IncludedField)
+		assert.Equal(t, "", result.SkippedField) // Should remain zero value
+	})
+
+	t.Run("round_trip_with_tags", func(t *testing.T) {
+		type TestStruct struct {
+			RenamedField string `huml:"renamed"`
+			OmitEmpty    int    `huml:"omit_empty,omitempty"`
+			Skipped      string `huml:"-"`
+			NormalField  string `huml:"normal"`
+		}
+
+		original := TestStruct{
+			RenamedField: "value1",
+			OmitEmpty:    0, // Will be omitted
+			Skipped:      "should not appear",
+			NormalField:  "value2",
+		}
+
+		// Marshal
+		marshalled, err := Marshal(original)
+		if err != nil {
+			t.Fatalf("unexpected error marshalling: %v", err)
+		}
+
+		// Unmarshal back
+		var result TestStruct
+		err = Unmarshal(marshalled, &result)
+		if err != nil {
+			t.Fatalf("unexpected error unmarshalling: %v", err)
+		}
+
+		// Verify round trip
+		assert.Equal(t, original.RenamedField, result.RenamedField)
+		assert.Equal(t, original.NormalField, result.NormalField)
+		assert.Equal(t, 0, result.OmitEmpty) // Should remain zero since it was omitted
+		assert.Equal(t, "", result.Skipped)  // Should remain zero since it was skipped
+	})
+}

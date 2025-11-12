@@ -34,8 +34,16 @@ import (
 //	// Field appears as 'my_field' in HUML.
 //	Field int `huml:"my_field"`
 //
-//	// Field is ignored.
+//	// Field is ignored during marshalling.
 //	Field int `huml:"-"`
+//
+//	// Field is omitted if it has a zero/empty value.
+//	Field string `huml:"my_field,omitempty"`
+//
+// The omitempty option skips fields that are:
+//   - Empty strings, zero numbers, false booleans
+//   - Nil pointers, empty slices/maps/arrays
+//   - Structs where all exported fields are empty
 func Marshal(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := NewEncoder(&buf)
@@ -197,6 +205,80 @@ func (s *state) marshalMap(v reflect.Value, indent int) {
 	}
 }
 
+// parseStructTag parses a struct tag and returns the field name and options.
+// It handles tags like `huml:"name,omitempty"` or `huml:"-"` or `huml:"custom_name"`.
+//
+// Returns:
+//   - name: the field name to use (or "-" if the field should be skipped)
+//   - omitempty: whether the omitempty option is set
+//
+// Golang concept: Struct tags are string literals attached to struct fields.
+// They're accessed via reflect.StructTag.Get("tagname"). The format is typically
+// "value" or "value,option1,option2". We parse this to extract the name and options.
+func parseStructTag(tag reflect.StructTag) (name string, omitempty bool) {
+	tagValue := tag.Get("huml")
+	if tagValue == "" {
+		return "", false
+	}
+
+	// Handle the skip marker "-"
+	if tagValue == "-" {
+		return "-", false
+	}
+
+	// Split by comma to separate name from options
+	parts := strings.Split(tagValue, ",")
+	name = parts[0]
+
+	// Check for omitempty option in the remaining parts
+	for i := 1; i < len(parts); i++ {
+		option := strings.TrimSpace(parts[i])
+		if option == "omitempty" {
+			omitempty = true
+		}
+	}
+
+	return name, omitempty
+}
+
+// isEmptyValue checks if a reflect.Value represents an "empty" value.
+// This is used for the omitempty tag option.
+//
+// Golang concept: In Go, we need to check if a value is "zero" or "empty".
+// Different types have different zero values: "" for strings, 0 for numbers,
+// false for bools, nil for pointers/slices/maps, empty structs, etc.
+func isEmptyValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+		return v.Len() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Interface, reflect.Ptr:
+		return v.IsNil()
+	case reflect.Struct:
+		// For structs, check if all exported fields are empty
+		// Note: We only check exported fields since unexported fields
+		// can't be marshalled anyway.
+		for i := 0; i < v.NumField(); i++ {
+			fieldValue := v.Field(i)
+			fieldType := v.Type().Field(i)
+			// Only check exported fields
+			if fieldType.IsExported() && !isEmptyValue(fieldValue) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // marshalStruct converts a Go struct into a HUML multi-line dictionary.
 func (s *state) marshalStruct(v reflect.Value, indent int) {
 	var fields []struct {
@@ -212,14 +294,20 @@ func (s *state) marshalStruct(v reflect.Value, indent int) {
 			continue
 		}
 
-		// Parse the `huml` tag to determine the field name or if it should be skipped.
-		tag := field.Tag.Get("huml")
-		if tag == "-" {
+		// Parse the `huml` tag to determine the field name and options.
+		fieldName, omitempty := parseStructTag(field.Tag)
+		if fieldName == "-" {
 			continue
 		}
-		fieldName := tag
 		if fieldName == "" {
 			fieldName = field.Name
+		}
+
+		fieldValue := v.Field(i)
+
+		// If omitempty is set and the value is empty, skip this field.
+		if omitempty && isEmptyValue(fieldValue) {
+			continue
 		}
 
 		fields = append(fields, struct {
@@ -227,7 +315,7 @@ func (s *state) marshalStruct(v reflect.Value, indent int) {
 			value reflect.Value
 		}{
 			name:  fieldName,
-			value: v.Field(i),
+			value: fieldValue,
 		})
 	}
 
