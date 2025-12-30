@@ -102,8 +102,8 @@ func (p *parser) parse() (any, error) {
 
 			if p.pos > start {
 				version = string(p.data[start:p.pos])
-				if version != "v0.1.0" {
-					return nil, p.errorf("unsupported version '%s'. expected 'v0.1.0'", version)
+				if version != "v0.2.0" {
+					return nil, p.errorf("unsupported version '%s'. expected 'v0.2.0'", version)
 				}
 			}
 		}
@@ -283,7 +283,7 @@ func (p *parser) parseMultilineDict(indent int) (any, error) {
 
 			// Determine if a value is multi-line before parsing it
 			// because the multi-line parser consumes its own newlines.
-			isMultiline := p.peekString("```") || p.peekString(`"""`)
+			isMultiline := p.peekString(`"""`)
 
 			val, err = p.parseValue(curIndent)
 			if err != nil {
@@ -582,11 +582,9 @@ func (p *parser) parseValue(keyIndent int) (any, error) {
 	switch c := p.data[p.pos]; {
 	case c == '"':
 		if p.peekString(`"""`) {
-			return p.parseMultilineString(keyIndent, false)
+			return p.parseMultilineString(keyIndent)
 		}
 		return p.parseString()
-	case c == '`' && p.peekString("```"):
-		return p.parseMultilineString(keyIndent, true)
 	case c == 't' && p.peekString("true"):
 		p.advance(4)
 		return true, nil
@@ -685,8 +683,8 @@ func (p *parser) parseString() (string, error) {
 // fnLineProcessor defines how to process each line of content in a multiline string.
 type fnLineProcessor func(lineContent string, lineIndent, keyIndent int) string
 
-// parseMultilineString parses both ``` (preserve space) and """ (strip space) strings.
-func (p *parser) parseMultilineString(keyIndent int, preserveSpaces bool) (string, error) {
+// parseMultilineString parses """ (preserves preceding space) multiline strings.
+func (p *parser) parseMultilineString(keyIndent int) (string, error) {
 	delim := string(p.data[p.pos : p.pos+3])
 	p.advance(3)
 
@@ -695,22 +693,13 @@ func (p *parser) parseMultilineString(keyIndent int, preserveSpaces bool) (strin
 		return "", err
 	}
 
-	// Define the line processing strategy based on the string type.
-	var fn fnLineProcessor
-	if preserveSpaces {
-		// Strip the required 2-space indent relative to the key.
-		fn = func(lineContent string, lineIndent, keyIndent int) string {
-			reqIndent := keyIndent + 2
-			if len(lineContent) >= reqIndent && isSpaceString(lineContent[:reqIndent]) {
-				return lineContent[reqIndent:]
-			}
-			return lineContent
+	// Strip the required 2-space indent relative to the key.
+	fn := func(lineContent string, lineIndent, keyIndent int) string {
+		reqIndent := keyIndent + 2
+		if len(lineContent) >= reqIndent && isSpaceString(lineContent[:reqIndent]) {
+			return lineContent[reqIndent:]
 		}
-	} else {
-		// Strip all leading and trailing whitespace from the line.
-		fn = func(lineContent string, lineIndent, keyIndent int) string {
-			return strings.TrimSpace(lineContent)
-		}
+		return lineContent
 	}
 
 	return p.parseMultilineStringContent(delim, keyIndent, fn)

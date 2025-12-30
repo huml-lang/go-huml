@@ -49,7 +49,7 @@ func Marshal(v any) ([]byte, error) {
 	encoder := NewEncoder(&buf)
 	// The HUML specification indicates that an optional version directive can be at the top.
 	// We will add this by default for clarity and compliance.
-	if _, err := buf.WriteString("%HUML v0.1.0\n"); err != nil {
+	if _, err := buf.WriteString("%HUML v0.2.0\n"); err != nil {
 		return nil, err
 	}
 	if err := encoder.Encode(v); err != nil {
@@ -373,7 +373,7 @@ func (s *state) marshalSlice(v reflect.Value, indent int) {
 // marshalString handles both single-line and multi-line strings.
 func (s *state) marshalString(str string, indent int) {
 	// If a string contains a newline, it must be formatted as a multi-line string.
-	// We use ``` to preserve all whitespace as per the spec.
+	// We use """ to preserve all whitespace as per the spec.
 	if strings.Contains(str, "\n") {
 		// The `indent` passed here is the indentation for the value, which is key_indent + 2.
 		// The content of the multi-line string must be at key_indent + 2.
@@ -381,7 +381,7 @@ func (s *state) marshalString(str string, indent int) {
 		keyIndent := indent - 2
 		contentIndent := indent
 
-		s.write("```\n")
+		s.write("\"\"\"\n")
 		lines := strings.Split(str, "\n")
 		// The last line of a multi-line string from split can be empty if the string ends with a newline.
 		// We trim this to avoid an extra trailing newline inside the HUML block.
@@ -394,7 +394,7 @@ func (s *state) marshalString(str string, indent int) {
 			s.write("\n")
 		}
 		s.write(strings.Repeat(" ", keyIndent))
-		s.write("```")
+		s.write("\"\"\"")
 	} else {
 		// Standard Go quoting handles all necessary escapes for a valid HUML string.
 		s.write(strconv.Quote(str))
