@@ -15,6 +15,12 @@ import (
 	"sync"
 )
 
+var versionPrefix = "%HUML v0.2.0"
+
+func SetPrefix(str string) {
+	versionPrefix = str
+}
+
 // Marshal returns the HUML encoding of v.
 //
 // This function works like json.Marshal, converting a Go value into a HUML
@@ -49,7 +55,7 @@ func Marshal(v any) ([]byte, error) {
 	encoder := NewEncoder(&buf)
 	// The HUML specification indicates that an optional version directive can be at the top.
 	// We will add this by default for clarity and compliance.
-	if _, err := buf.WriteString("%HUML v0.2.0\n"); err != nil {
+	if _, err := buf.WriteString(fmt.Sprintf("%v\n", versionPrefix)); err != nil {
 		return nil, err
 	}
 	if err := encoder.Encode(v); err != nil {
