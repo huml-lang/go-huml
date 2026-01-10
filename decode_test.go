@@ -324,33 +324,35 @@ func TestDocuments(t *testing.T) {
 	}
 }
 
-func BenchmarkParseHUML(b *testing.B) {
-	f, err := os.ReadFile("test.huml")
+func BenchmarkUnmarshalHUML(b *testing.B) {
+	data, err := os.ReadFile("tests/documents/mixed.huml")
 	if err != nil {
-		b.Fatalf("failed to read test.huml: %v", err)
+		b.Fatalf("failed to read tests/documents/mixed.huml: %v", err)
 	}
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
 		var result any
-		if err := Unmarshal(f, &result); err != nil {
+		if err := Unmarshal(data, &result); err != nil {
 			b.Fatalf("unexpected error: %v", err)
 		}
 	}
 }
 
-func BenchmarkParseJSON(b *testing.B) {
-	f, err := os.ReadFile("test.json")
+func BenchmarkUnmarshalJSON(b *testing.B) {
+	data, err := os.ReadFile("tests/documents/mixed.json")
 	if err != nil {
-		b.Fatalf("failed to read test.json: %v", err)
+		b.Fatalf("failed to read tests/documents/mixed.json: %v", err)
 	}
 
+	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
 		var result any
-		if err := json.Unmarshal(f, &result); err != nil {
+		if err := json.Unmarshal(data, &result); err != nil {
 			b.Fatalf("unexpected error: %v", err)
 		}
 	}
