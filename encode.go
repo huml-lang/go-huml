@@ -21,6 +21,25 @@ func SetPrefix(str string) {
 	versionPrefix = str
 }
 
+// An Encoder writes HUML values to an output stream.
+type Encoder struct {
+	w io.Writer
+}
+
+// state holds the encoding state for a single Marshal or Encode call.
+// It is used to pass state through the recursive encoding process without
+// passing many arguments.
+type state struct {
+	w   io.Writer
+	err error
+}
+
+var statePool = sync.Pool{
+	New: func() any {
+		return new(state)
+	},
+}
+
 // Marshal returns the HUML encoding of v.
 //
 // This function works like json.Marshal, converting a Go value into a HUML
@@ -64,11 +83,6 @@ func Marshal(v any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// An Encoder writes HUML values to an output stream.
-type Encoder struct {
-	w io.Writer
-}
-
 // NewEncoder returns a new encoder that writes to w.
 func NewEncoder(w io.Writer) *Encoder {
 	return &Encoder{w: w}
@@ -87,20 +101,6 @@ func (enc *Encoder) Encode(v any) error {
 	err := s.err
 	putState(s)
 	return err
-}
-
-// state holds the encoding state for a single Marshal or Encode call.
-// It is used to pass state through the recursive encoding process without
-// passing many arguments.
-type state struct {
-	w   io.Writer
-	err error
-}
-
-var statePool = sync.Pool{
-	New: func() any {
-		return new(state)
-	},
 }
 
 // newState retrieves a new state from the pool.
@@ -227,16 +227,16 @@ func parseStructTag(tag reflect.StructTag) (name string, omitempty bool) {
 		return "", false
 	}
 
-	// Handle the skip marker "-"
+	// Handle the skip marker "-".
 	if tagValue == "-" {
 		return "-", false
 	}
 
-	// Split by comma to separate name from options
+	// Split by comma to separate name from options.
 	parts := strings.Split(tagValue, ",")
 	name = parts[0]
 
-	// Check for omitempty option in the remaining parts
+	// Check for omitempty option in the remaining parts.
 	for i := 1; i < len(parts); i++ {
 		option := strings.TrimSpace(parts[i])
 		if option == "omitempty" {
@@ -268,13 +268,13 @@ func isEmptyValue(v reflect.Value) bool {
 	case reflect.Interface, reflect.Ptr:
 		return v.IsNil()
 	case reflect.Struct:
-		// For structs, check if all exported fields are empty
-		// Note: We only check exported fields since unexported fields
+		// For structs, check if all exported fields are empty.
+		// We only check exported fields since unexported fields
 		// can't be marshalled anyway.
 		for i := 0; i < v.NumField(); i++ {
 			fieldValue := v.Field(i)
 			fieldType := v.Type().Field(i)
-			// Only check exported fields
+			// Only check exported fields.
 			if fieldType.IsExported() && !isEmptyValue(fieldValue) {
 				return false
 			}
@@ -485,7 +485,7 @@ func quoteKeyIfNeeded(key string) string {
 func indirect(v reflect.Value, err *error) reflect.Value {
 	// The loop limit is a safeguard against circular data structures, which would
 	// otherwise cause an infinite loop.
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		if !v.IsValid() {
 			return v
 		}
@@ -498,6 +498,7 @@ func indirect(v reflect.Value, err *error) reflect.Value {
 		}
 		v = v.Elem()
 	}
+
 	// If we hit the loop limit, the structure is too deep or cyclical.
 	*err = fmt.Errorf("huml: encountered a circular or excessively deep data structure")
 	return reflect.Value{}
