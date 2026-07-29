@@ -372,32 +372,30 @@ func (s *state) marshalSlice(v reflect.Value, indent int) {
 
 // marshalString handles both single-line and multi-line strings.
 func (s *state) marshalString(str string, indent int) {
-	// If a string contains a newline, it must be formatted as a multi-line string.
-	// We use """ to preserve all whitespace as per the spec.
+	// A string containing a newline must use a multi-line """ block to stay lossless.
 	if strings.Contains(str, "\n") {
-		// The `indent` passed here is the indentation for the value, which is key_indent + 2.
-		// The content of the multi-line string must be at key_indent + 2.
-		// The closing delimiter must be at key_indent.
+		// The closing delimiter sits at the key indent, content one level (2 spaces)
+		// deeper. At the document root indent is 0, so clamp to avoid a negative repeat.
 		keyIndent := indent - 2
-		contentIndent := indent
+		if keyIndent < 0 {
+			keyIndent = 0
+		}
+		contentIndent := keyIndent + 2
 
 		s.write("\"\"\"\n")
-		lines := strings.Split(str, "\n")
-		// The last line of a multi-line string from split can be empty if the string ends with a newline.
-		// We trim this to avoid an extra trailing newline inside the HUML block.
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		for _, line := range lines {
-			s.write(strings.Repeat(" ", contentIndent))
-			s.write(line)
+		// Split is the exact inverse of the decoder's line-join: emit every line,
+		// including a trailing empty one, so genuine trailing newlines survive.
+		for _, line := range strings.Split(str, "\n") {
+			if line != "" {
+				s.write(strings.Repeat(" ", contentIndent))
+				s.write(line)
+			}
 			s.write("\n")
 		}
 		s.write(strings.Repeat(" ", keyIndent))
 		s.write("\"\"\"")
 	} else {
-		// Standard Go quoting handles all necessary escapes for a valid HUML string.
-		s.write(strconv.Quote(str))
+		s.write(humlQuote(str))
 	}
 }
 
@@ -469,7 +467,40 @@ func quoteKeyIfNeeded(key string) string {
 	if bareKeyRegex.MatchString(key) {
 		return key
 	}
-	return strconv.Quote(key)
+	return humlQuote(key)
+}
+
+// humlQuote returns the HUML double-quoted form of s. The spec permits only the
+// escapes \" \\ \b \f \n \r \t \v and forbids \x/\u/\U, so every other byte,
+// control characters included, is written literally in its canonical form.
+func humlQuote(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\v':
+			b.WriteString(`\v`)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // indirect walks down a chain of pointers and interfaces to find the underlying
