@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const maxDepth = 1000
+
 // streamParser parses tokens into HUML values.
 type streamParser struct {
 	lexer *lexer
@@ -64,7 +66,11 @@ func (p *streamParser) parse() (any, error) {
 		return p.assertRootEnd(map[string]any{}, "root dict")
 
 	case typeMultilineList:
-		return p.parseMultilineList(0)
+		result, err = p.parseMultilineList(0)
+		if err != nil {
+			return nil, err
+		}
+		return p.assertRootEnd(result, "root list")
 
 	case typeMultilineDict:
 		return p.parseMultilineDict(0)
@@ -104,7 +110,7 @@ func (p *streamParser) parseRootScalar() (any, error) {
 	}
 
 	// Check for multiline string.
-	if tk.Type == TokenString && tk.Value == `"""` {
+	if tk.Type == tokenMultilineString {
 		p.lexer.next() // Consume the marker token.
 		mlTk, err := p.lexer.scanMultilineString(0)
 		if err != nil {
@@ -156,7 +162,11 @@ func (p *streamParser) inferRootType() (dataType, error) {
 		}
 
 		// Look for comma on line to determine inline vs multiline.
-		if p.hasCommaOnLine() {
+		hasComma, err := p.hasCommaOnLine()
+		if err != nil {
+			return typeScalar, err
+		}
+		if hasComma {
 			return typeInlineDict, nil
 		}
 
@@ -165,7 +175,11 @@ func (p *streamParser) inferRootType() (dataType, error) {
 
 	// Check for inline list (values followed by comma).
 	if isValueToken(tk.Type) || tk.Type == TokenString {
-		if p.hasCommaOnLine() {
+		hasComma, err := p.hasCommaOnLine()
+		if err != nil {
+			return typeScalar, err
+		}
+		if hasComma {
 			return typeInlineList, nil
 		}
 
@@ -177,32 +191,28 @@ func (p *streamParser) inferRootType() (dataType, error) {
 
 // hasVectorIndicatorAfterKey checks if the first key on the line is followed by ::.
 func (p *streamParser) hasVectorIndicatorAfterKey() bool {
-	origPos := p.lexer.pos
-
-	// Scan past the key.
-	for p.lexer.pos < len(p.lexer.line) && p.lexer.line[p.lexer.pos] != ':' {
-		p.lexer.pos++
-	}
-
-	// Check for ::
-	result := false
-	if p.lexer.pos+1 < len(p.lexer.line) && p.lexer.line[p.lexer.pos] == ':' && p.lexer.line[p.lexer.pos+1] == ':' {
-		result = true
-	}
-
-	p.lexer.pos = origPos
-	return result
+	return p.lexer.peekString("::")
 }
 
-// hasCommaOnLine checks if there's a comma on the current line.
-func (p *streamParser) hasCommaOnLine() bool {
-	// Scan through the current line looking for comma (read-only, no state changes).
-	for i := p.lexer.pos; i < len(p.lexer.line); i++ {
-		if p.lexer.line[i] == ',' {
-			return true
+// hasCommaOnLine looks for separator tokens without consuming parser input.
+func (p *streamParser) hasCommaOnLine() (bool, error) {
+	look := *p.lexer
+	look.tokens = nil
+	look.tokPos = 0
+	look.strBuf = nil
+	for !look.atEndOfLine() {
+		tk, err := look.scanToken()
+		if err != nil {
+			return false, err
+		}
+		switch tk.Type {
+		case TokenComma:
+			return true, nil
+		case tokenMultilineString:
+			return false, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // isValueToken returns true if the token type represents a value.
@@ -322,7 +332,7 @@ func (p *streamParser) parseMultilineList(indent int) (any, error) {
 
 		// Expect list item marker.
 		if tk.Type != TokenListItem {
-			break
+			return nil, fmt.Errorf("line %d: expected list item", tk.Line)
 		}
 
 		// Consume list item marker.
@@ -360,7 +370,7 @@ func (p *streamParser) parseListItemValue(indent int) (any, error) {
 	}
 
 	// Check for multiline string.
-	if tk.Type == TokenString && tk.Value == `"""` {
+	if tk.Type == tokenMultilineString {
 		p.lexer.next()
 		mlTk, err := p.lexer.scanMultilineString(indent)
 		if err != nil {
@@ -383,6 +393,9 @@ func (p *streamParser) parseListItemValue(indent int) (any, error) {
 
 // parseVector parses a vector after the :: indicator.
 func (p *streamParser) parseVector(indent int) (any, error) {
+	if indent/2 >= maxDepth {
+		return nil, p.lexer.errorf("maximum nesting depth exceeded")
+	}
 	// Check if inline (space follows) or multiline (newline/comment follows).
 	if p.lexer.atEndOfLine() {
 		// Multiline vector.
@@ -594,7 +607,7 @@ func (p *streamParser) parseScalarValue(keyIndent int) (any, error) {
 	}
 
 	// Check for multiline string.
-	if tk.Type == TokenString && tk.Value == `"""` {
+	if tk.Type == tokenMultilineString {
 		p.lexer.next() // Consume the marker.
 		mlTk, err := p.lexer.scanMultilineString(keyIndent)
 		if err != nil {
@@ -622,10 +635,18 @@ func (p *streamParser) tokenToValue(tok Token) (any, error) {
 		return tok.Value, nil
 
 	case TokenInt:
-		return p.parseIntValue(tok.Value)
+		v, err := p.parseIntValue(tok.Value)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", tok.Line, err)
+		}
+		return v, nil
 
 	case TokenFloat:
-		return p.parseFloatValue(tok.Value)
+		v, err := p.parseFloatValue(tok.Value)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", tok.Line, err)
+		}
+		return v, nil
 
 	case TokenBool:
 		return tok.Value == "true", nil
@@ -655,61 +676,26 @@ func (p *streamParser) tokenToValue(tok Token) (any, error) {
 
 // parseIntValue parses an integer value from string.
 func (p *streamParser) parseIntValue(s string) (int64, error) {
-	// Handle sign.
-	sign := int64(1)
-	idx := 0
+	s = strings.ReplaceAll(s, "_", "")
+	sign := ""
 	if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
-		if s[0] == '-' {
-			sign = -1
-		}
-		idx = 1
+		sign, s = s[:1], s[1:]
 	}
-
-	// Handle base prefixes.
 	base := 10
-	if len(s)-idx > 2 {
-		prefix := s[idx : idx+2]
-		switch prefix {
-		case "0x", "0X":
+	if len(s) >= 2 {
+		switch s[:2] {
+		case "0x":
 			base = 16
-			idx += 2
-		case "0o", "0O":
+		case "0o":
 			base = 8
-			idx += 2
-		case "0b", "0B":
+		case "0b":
 			base = 2
-			idx += 2
+		}
+		if base != 10 {
+			s = s[2:]
 		}
 	}
-
-	// Parse digits, skipping underscores inline.
-	var val int64
-	for i := idx; i < len(s); i++ {
-		c := s[i]
-		if c == '_' {
-			continue
-		}
-
-		var digit int64
-		switch {
-		case c >= '0' && c <= '9':
-			digit = int64(c - '0')
-		case c >= 'a' && c <= 'f':
-			digit = int64(c - 'a' + 10)
-		case c >= 'A' && c <= 'F':
-			digit = int64(c - 'A' + 10)
-		default:
-			return 0, fmt.Errorf("invalid digit '%c'", c)
-		}
-
-		if digit >= int64(base) {
-			return 0, fmt.Errorf("invalid digit '%c' for base %d", c, base)
-		}
-
-		val = val*int64(base) + digit
-	}
-
-	return sign * val, nil
+	return strconv.ParseInt(sign+s, base, 64)
 }
 
 // parseFloatValue parses a float value from string, skipping underscores.

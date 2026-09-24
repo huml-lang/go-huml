@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // An Encoder writes HUML values to an output stream.
@@ -42,7 +43,7 @@ var statePool = sync.Pool{
 // The mapping from Go types to HUML is as follows:
 //   - bool -> true | false
 //   - int, float, etc. -> number
-//   - string -> "quoted string" or ```multiline string```
+//   - string -> double-quoted or triple-quoted multiline string
 //   - struct -> multi-line dictionary
 //   - map -> multi-line dictionary
 //   - slice, array -> multi-line list
@@ -127,6 +128,11 @@ func (s *state) marshalValue(v reflect.Value, indent int) {
 		return
 	}
 
+	if indent/2 >= maxDepth {
+		s.err = fmt.Errorf("huml: encountered a circular or excessively deep data structure")
+		return
+	}
+
 	// Follow pointers and interfaces to find the concrete value.
 	// If we encounter a nil pointer along the way, it represents a null value.
 	v = indirect(v, &s.err)
@@ -163,7 +169,11 @@ func (s *state) marshalValue(v reflect.Value, indent int) {
 			s.write("-inf")
 		} else {
 			// 'g' format is used for the most compact representation.
-			s.write(strconv.FormatFloat(f, 'g', -1, 64))
+			str := strconv.FormatFloat(f, 'g', -1, 64)
+			if !strings.ContainsAny(str, ".e") {
+				str += ".0"
+			}
+			s.write(str)
 		}
 	case reflect.Bool:
 		s.write(strconv.FormatBool(v.Bool()))
@@ -281,6 +291,7 @@ func isEmptyValue(v reflect.Value) bool {
 
 // marshalStruct converts a Go struct into a HUML multi-line dictionary.
 func (s *state) marshalStruct(v reflect.Value, indent int) {
+	seen := make(map[string]bool, v.NumField())
 	var fields []struct {
 		name  string
 		value reflect.Value
@@ -309,6 +320,12 @@ func (s *state) marshalStruct(v reflect.Value, indent int) {
 		if omitempty && isEmptyValue(fieldValue) {
 			continue
 		}
+
+		if seen[fieldName] {
+			s.err = fmt.Errorf("huml: duplicate struct key %q", fieldName)
+			return
+		}
+		seen[fieldName] = true
 
 		fields = append(fields, struct {
 			name  string
@@ -352,7 +369,8 @@ func (s *state) marshalSlice(v reflect.Value, indent int) {
 
 		// Determine if the list element is a scalar or a vector.
 		// This is necessary to decide between `- value` and `- ::\n  ...`.
-		elemKind := indirect(elem, &s.err).Kind()
+		iElem := indirect(elem, &s.err)
+		elemKind := iElem.Kind()
 		if s.err != nil {
 			return
 		}
@@ -360,8 +378,8 @@ func (s *state) marshalSlice(v reflect.Value, indent int) {
 		isVector := elemKind == reflect.Map || elemKind == reflect.Struct || elemKind == reflect.Slice || elemKind == reflect.Array
 
 		if isVector {
-			// A vector within a list is denoted by `::` and must start on a new line.
-			s.write("::\n")
+			// Empty vectors stay on the item line.
+			s.writeVectorIndicator(iElem)
 			s.marshalValue(elem, indent+2)
 		} else {
 			// A scalar within a list is written on the same line.
@@ -372,32 +390,21 @@ func (s *state) marshalSlice(v reflect.Value, indent int) {
 
 // marshalString handles both single-line and multi-line strings.
 func (s *state) marshalString(str string, indent int) {
-	// If a string contains a newline, it must be formatted as a multi-line string.
-	// We use """ to preserve all whitespace as per the spec.
+	if !utf8.ValidString(str) {
+		s.err = fmt.Errorf("huml: invalid UTF-8 in string")
+		return
+	}
 	if strings.Contains(str, "\n") {
-		// The `indent` passed here is the indentation for the value, which is key_indent + 2.
-		// The content of the multi-line string must be at key_indent + 2.
-		// The closing delimiter must be at key_indent.
-		keyIndent := indent - 2
-		contentIndent := indent
-
 		s.write("\"\"\"\n")
-		lines := strings.Split(str, "\n")
-		// The last line of a multi-line string from split can be empty if the string ends with a newline.
-		// We trim this to avoid an extra trailing newline inside the HUML block.
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		for _, line := range lines {
-			s.write(strings.Repeat(" ", contentIndent))
+		for _, line := range strings.Split(str, "\n") {
+			s.write(strings.Repeat(" ", indent+2))
 			s.write(line)
 			s.write("\n")
 		}
-		s.write(strings.Repeat(" ", keyIndent))
+		s.write(strings.Repeat(" ", indent))
 		s.write("\"\"\"")
 	} else {
-		// Standard Go quoting handles all necessary escapes for a valid HUML string.
-		s.write(strconv.Quote(str))
+		s.write(quoteString(str))
 	}
 }
 
@@ -406,17 +413,36 @@ func (s *state) isStructEmpty(v reflect.Value) bool {
 	// This assumes 'v' is an indirected value of kind Struct.
 	for i := 0; i < v.NumField(); i++ {
 		field := v.Type().Field(i)
-		// A field is marshallable if it's exported and not tagged with "-".
-		if field.IsExported() && field.Tag.Get("huml") != "-" {
+		name, omit := parseStructTag(field.Tag)
+		if field.IsExported() && name != "-" && !(omit && isEmptyValue(v.Field(i))) {
 			return false
 		}
 	}
 	return true
 }
 
+// writeVectorIndicator chooses inline notation for empty vectors.
+func (s *state) writeVectorIndicator(v reflect.Value) {
+	empty := false
+	if v.Kind() == reflect.Struct {
+		empty = s.isStructEmpty(v)
+	} else {
+		empty = v.Len() == 0
+	}
+	if empty {
+		s.write(":: ")
+	} else {
+		s.write("::\n")
+	}
+}
+
 // writeKVPair writes a complete key-value pair, including indentation, the key,
 // the correct indicator (':' or '::'), and the marshalled value.
 func (s *state) writeKVPair(key string, val reflect.Value, indent int) {
+	if !utf8.ValidString(key) {
+		s.err = fmt.Errorf("huml: invalid UTF-8 in key")
+		return
+	}
 	s.write(strings.Repeat(" ", indent))
 	s.write(quoteKeyIfNeeded(key))
 
@@ -430,32 +456,12 @@ func (s *state) writeKVPair(key string, val reflect.Value, indent int) {
 	isVector := valKind == reflect.Map || valKind == reflect.Struct || valKind == reflect.Slice || valKind == reflect.Array
 
 	if isVector {
-		isEmpty := false
-		switch valKind {
-		case reflect.Map, reflect.Slice, reflect.Array:
-			if iVal.Len() == 0 {
-				isEmpty = true
-			}
-		case reflect.Struct:
-			if s.isStructEmpty(iVal) {
-				isEmpty = true
-			}
-		}
-
-		// This is the crucial change. For multi-line (non-empty) vectors, `::` is
-		// followed by a newline. For empty vectors, it's followed by a space.
-		if isEmpty {
-			s.write(":: ")
-		} else {
-			s.write("::\n")
-		}
+		s.writeVectorIndicator(iVal)
+		s.marshalValue(val, indent+2)
 	} else {
 		s.write(": ")
+		s.marshalValue(val, indent)
 	}
-
-	// The value of a key-value pair is always indented further.
-	// For a multi-line vector, its content starts at the new indentation level.
-	s.marshalValue(val, indent+2)
 }
 
 // A regular expression to check if a key is a "bare" key, meaning it doesn't
@@ -469,7 +475,17 @@ func quoteKeyIfNeeded(key string) string {
 	if bareKeyRegex.MatchString(key) {
 		return key
 	}
-	return strconv.Quote(key)
+	return quoteString(key)
+}
+
+// HUML allows these escapes. All other Unicode characters remain as literals.
+var stringEscaper = strings.NewReplacer(
+	"\\", "\\\\", "\"", "\\\"", "\b", "\\b", "\f", "\\f",
+	"\n", "\\n", "\r", "\\r", "\t", "\\t", "\v", "\\v",
+)
+
+func quoteString(str string) string {
+	return "\"" + stringEscaper.Replace(str) + "\""
 }
 
 // indirect walks down a chain of pointers and interfaces to find the underlying
@@ -479,7 +495,7 @@ func quoteKeyIfNeeded(key string) string {
 func indirect(v reflect.Value, err *error) reflect.Value {
 	// The loop limit is a safeguard against circular data structures, which would
 	// otherwise cause an infinite loop.
-	for range 1000 {
+	for range maxDepth {
 		if !v.IsValid() {
 			return v
 		}

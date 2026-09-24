@@ -59,7 +59,7 @@ func main() {
 
     fmt.Println(string(res))
     // Output:
-    // %HUML v0.1.0
+    // %HUML v0.2.0
     // active: true
     // age: 30
     // name: "Alice"
@@ -146,7 +146,7 @@ func main() {
     data, _ := huml.Marshal(person)
     fmt.Println(string(data))
     // Output:
-    // %HUML v0.1.0
+    // %HUML v0.2.0
     // name: "Alice"
     // tags::
     //   - "developer"

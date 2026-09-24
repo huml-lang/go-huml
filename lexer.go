@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"unicode/utf8"
 )
 
 // lexer tokenizes HUML input from an io.Reader.
@@ -19,7 +20,7 @@ type lexer struct {
 	err            error   // First error encountered.
 	tokens         []Token // Token buffer for lookahead.
 	tokPos         int     // Current position in token buffer.
-	atLineStart    bool    // True if at start of line (for indent tracking).
+	seenContent    bool    // True after the first value or version directive.
 	curIndent      int     // Indentation of current line.
 	hadSpaceBefore bool    // True if space was skipped before last scanned token.
 	inMultilineStr bool    // True if currently parsing multiline string content.
@@ -38,11 +39,10 @@ var (
 // newLexer creates a new lexer that reads from r.
 func newLexer(r io.Reader) *lexer {
 	return &lexer{
-		r:           bufio.NewReader(r),
-		lineNum:     0,
-		atLineStart: true,
-		lineBuf:     make([]byte, 0, 256),
-		strBuf:      make([]byte, 0, 64),
+		r:       bufio.NewReader(r),
+		lineNum: 0,
+		lineBuf: make([]byte, 0, 256),
+		strBuf:  make([]byte, 0, 64),
 	}
 }
 
@@ -77,71 +77,40 @@ func (l *lexer) peek() (Token, error) {
 	return tok, nil
 }
 
-// scan reads the next token from input.
+// scan reads the next token, preserving line endings until consumeLine is called.
 func (l *lexer) scan() (Token, error) {
 	if l.err != nil {
-		return Token{Type: TokenError, Value: l.err.Error()}, l.err
+		return Token{Type: TokenError}, l.err
 	}
-
-	// Read a new line if needed.
-	for l.line == nil || l.pos >= len(l.line) {
+	for l.line == nil {
 		if l.eof {
 			return Token{Type: TokenEOF, Line: l.lineNum}, nil
 		}
-
 		if err := l.readLine(); err != nil {
 			if err == io.EOF {
 				l.eof = true
 				return Token{Type: TokenEOF, Line: l.lineNum}, nil
 			}
 			l.err = err
-
-			return Token{Type: TokenError, Value: err.Error()}, err
+			return Token{Type: TokenError}, err
 		}
-
-		l.atLineStart = true
 		l.curIndent = l.countIndent()
 		l.pos = l.curIndent
-	}
-
-	// Skip blank lines and comment-only lines.
-	for l.line != nil && l.pos < len(l.line) {
-		if l.line[l.pos] == '#' {
-			// Comment - validate and skip line.
-			if err := l.validateComment(); err != nil {
+		if l.atEndOfLine() {
+			if err := l.consumeLine(); err != nil {
 				return Token{Type: TokenError}, err
 			}
-
-			// Read next line.
-			if l.eof {
-				return Token{Type: TokenEOF, Line: l.lineNum}, nil
-			}
-			if err := l.readLine(); err != nil {
-				if err == io.EOF {
-					l.eof = true
-					return Token{Type: TokenEOF, Line: l.lineNum}, nil
-				}
-				l.err = err
-				return Token{Type: TokenError}, err
-			}
-
-			l.atLineStart = true
-			l.curIndent = l.countIndent()
-			l.pos = l.curIndent
 			continue
 		}
-		break
-	}
-
-	// Check if line is now empty.
-	if l.line == nil || l.pos >= len(l.line) {
-		if l.eof {
-			return Token{Type: TokenEOF, Line: l.lineNum}, nil
+		if !l.seenContent && l.pos == 0 && l.peekString("%HUML") {
+			l.seenContent = true
+			if err := l.scanVersion(); err != nil {
+				return Token{Type: TokenError}, err
+			}
+			continue
 		}
-
-		return l.scan()
+		l.seenContent = true
 	}
-
 	return l.scanToken()
 }
 
@@ -172,6 +141,9 @@ func (l *lexer) readLine() error {
 	l.lineNum++
 	l.line = l.lineBuf
 	l.pos = 0
+	if !utf8.Valid(l.line) {
+		return l.errorf("invalid UTF-8")
+	}
 
 	// Validate: check for trailing spaces on the line.
 	// Skip this check when inside multiline strings (trailing spaces are content there).
@@ -222,26 +194,23 @@ func (l *lexer) scanToken() (Token, error) {
 		l.pos++
 	}
 
-	if l.pos >= len(l.line) {
-		// End of line - read next line.
-		if l.eof {
-			return Token{Type: TokenEOF, Line: l.lineNum}, nil
+	if l.pos >= len(l.line) || l.line[l.pos] == '#' {
+		if err := l.validateComment(); err != nil {
+			return Token{Type: TokenError}, err
 		}
-		return l.scan()
+		return Token{Type: TokenNewline, Line: l.lineNum, Indent: l.curIndent}, nil
 	}
 
 	startCol = l.pos
 	c := l.line[l.pos]
 
-	// Check for version directive at start of document.
-	if l.lineNum == 1 && l.pos == 0 && l.peekString("%HUML") {
-		return l.scanVersion()
-	}
-
 	// List item marker: "- " at start of content.
 	if c == '-' && l.pos == l.curIndent {
 		if l.pos+1 < len(l.line) && l.line[l.pos+1] == ' ' {
-			l.pos += 2
+			l.pos++
+			if err := l.skipRequiredSpace("after '-'"); err != nil {
+				return Token{Type: TokenError}, err
+			}
 			return Token{
 				Type:   TokenListItem,
 				Line:   l.lineNum,
@@ -276,8 +245,9 @@ func (l *lexer) scanToken() (Token, error) {
 	if c == '"' {
 		// Check for multiline string marker.
 		if l.peekString(`"""`) {
+			l.pos += 3
 			return Token{
-				Type:   TokenString,
+				Type:   tokenMultilineString,
 				Value:  `"""`,
 				Line:   l.lineNum,
 				Column: startCol,
@@ -332,27 +302,20 @@ func (l *lexer) scanToken() (Token, error) {
 	return Token{Type: TokenError}, l.errorf("unexpected character '%c'", c)
 }
 
-// scanVersion scans the %HUML version directive.
-func (l *lexer) scanVersion() (Token, error) {
+// scanVersion validates the supported version directive and consumes its line.
+func (l *lexer) scanVersion() error {
 	l.pos += len("%HUML")
-
-	// Skip optional space and version.
-	if l.pos < len(l.line) && l.line[l.pos] == ' ' {
+	if err := l.skipRequiredSpace("after '%HUML'"); err != nil {
+		return err
+	}
+	start := l.pos
+	for l.pos < len(l.line) && (isAlphaNum(l.line[l.pos]) || l.line[l.pos] == '.' || l.line[l.pos] == '_' || l.line[l.pos] == '-') {
 		l.pos++
-		// Skip version string.
-		for l.pos < len(l.line) && l.line[l.pos] != ' ' && l.line[l.pos] != '#' {
-			l.pos++
-		}
 	}
-
-	// Validate rest of line.
-	if err := l.validateRemaining(); err != nil {
-		return Token{Type: TokenError}, err
+	if string(l.line[start:l.pos]) != "v0.2.0" {
+		return l.errorf("unsupported HUML version %q (expected v0.2.0)", l.line[start:l.pos])
 	}
-
-	// Move to next line.
-	l.line = nil
-	return l.scan()
+	return l.consumeLine()
 }
 
 // validateRemaining checks for trailing content/spaces and consumes the line.
@@ -385,11 +348,6 @@ func (l *lexer) scanKeyOrString() (Token, error) {
 	str, err := l.scanQuotedString()
 	if err != nil {
 		return Token{Type: TokenError}, err
-	}
-
-	// Skip spaces after the string.
-	for l.pos < len(l.line) && l.line[l.pos] == ' ' {
-		l.pos++
 	}
 
 	// Check if followed by ':' (it's a key).
@@ -450,7 +408,7 @@ func (l *lexer) scanQuotedString() (string, error) {
 			}
 
 			switch esc := l.line[l.pos]; esc {
-			case '"', '\\', '/':
+			case '"', '\\':
 				l.strBuf = append(l.strBuf, esc)
 			case 'b':
 				l.strBuf = append(l.strBuf, '\b')
@@ -486,11 +444,6 @@ func (l *lexer) scanKeyOrKeyword() (Token, error) {
 	}
 
 	wb := l.line[start:l.pos]
-
-	// Skip spaces after word.
-	for l.pos < len(l.line) && l.line[l.pos] == ' ' {
-		l.pos++
-	}
 
 	// If followed by ':', it's a key.
 	if l.pos < len(l.line) && l.line[l.pos] == ':' {
@@ -567,11 +520,11 @@ func (l *lexer) scanNumber() (Token, error) {
 	// Check for base prefixes.
 	if l.line[l.pos] == '0' && l.pos+1 < len(l.line) {
 		switch l.line[l.pos+1] {
-		case 'x', 'X':
+		case 'x':
 			return l.scanBaseNumber(start, startCol, isHex)
-		case 'o', 'O':
+		case 'o':
 			return l.scanBaseNumber(start, startCol, isOctal)
-		case 'b', 'B':
+		case 'b':
 			return l.scanBaseNumber(start, startCol, isBinary)
 		}
 	}
@@ -585,7 +538,7 @@ func (l *lexer) scanNumber() (Token, error) {
 		} else if c == '.' {
 			isFloat = true
 			l.pos++
-		} else if c == 'e' || c == 'E' {
+		} else if c == 'e' {
 			isFloat = true
 			l.pos++
 			if l.pos < len(l.line) && (l.line[l.pos] == '+' || l.line[l.pos] == '-') {
@@ -645,7 +598,6 @@ func (l *lexer) scanBaseNumber(start, startCol int, isValidDigit func(byte) bool
 func (l *lexer) scanMultilineString(keyIndent int) (Token, error) {
 	startLine := l.lineNum
 	startCol := l.pos
-	l.pos += 3 // Consume """
 
 	// Rest of line after """ must be empty or comment.
 	if err := l.validateRemaining(); err != nil {
@@ -677,13 +629,7 @@ func (l *lexer) scanMultilineString(keyIndent int) (Token, error) {
 		lineIndent := l.countIndent()
 		l.pos = lineIndent
 
-		if l.peekString(`"""`) {
-			if lineIndent != keyIndent {
-				return Token{Type: TokenError}, l.errorf(
-					"multiline closing delimiter must be at same indentation as the key (%d spaces)",
-					keyIndent,
-				)
-			}
+		if lineIndent == keyIndent && l.peekString(`"""`) {
 			l.pos += 3
 
 			if err := l.validateRemaining(); err != nil {
@@ -693,7 +639,6 @@ func (l *lexer) scanMultilineString(keyIndent int) (Token, error) {
 			}
 
 			l.line = nil
-			l.atLineStart = true
 
 			// Trim trailing newline.
 			result := l.strBuf
@@ -709,9 +654,12 @@ func (l *lexer) scanMultilineString(keyIndent int) (Token, error) {
 			}, nil
 		}
 
-		// Strip the required indentation (keyIndent + 2 spaces).
+		// Empty lines carry no indentation; all nonempty content must be indented.
 		lineContent := l.line
-		if len(lineContent) >= reqIndent && isSpaceBytes(lineContent[:reqIndent]) {
+		if len(lineContent) > 0 {
+			if lineIndent < reqIndent {
+				return Token{Type: TokenError}, l.errorf("multiline content must be indented by at least %d spaces", reqIndent)
+			}
 			lineContent = lineContent[reqIndent:]
 		}
 		l.strBuf = append(l.strBuf, lineContent...)
@@ -721,29 +669,17 @@ func (l *lexer) scanMultilineString(keyIndent int) (Token, error) {
 
 // consumeLine validates rest of line and moves to next line.
 func (l *lexer) consumeLine() error {
-	// Skip spaces.
-	spaceStart := l.pos
-	for l.pos < len(l.line) && l.line[l.pos] == ' ' {
-		l.pos++
-	}
-
-	if l.pos >= len(l.line) {
-		if l.pos > spaceStart {
-			return l.errorf("trailing spaces are not allowed")
+	if l.tokPos < len(l.tokens) {
+		if l.tokens[l.tokPos].Type != TokenNewline {
+			return l.errorf("unexpected content at end of line")
 		}
-		l.line = nil
-		return nil
+		l.next()
 	}
-
-	if l.line[l.pos] == '#' {
-		if err := l.validateComment(); err != nil {
-			return err
-		}
-		l.line = nil
-		return nil
+	if err := l.validateRemaining(); err != nil {
+		return err
 	}
-
-	return l.errorf("unexpected content at end of line")
+	l.line = nil
+	return nil
 }
 
 // peekString checks if the given string is at the current position.
@@ -773,6 +709,10 @@ func (l *lexer) currentIndent() int {
 
 // atEndOfLine returns true if at end of logical content on line.
 func (l *lexer) atEndOfLine() bool {
+	if l.tokPos < len(l.tokens) {
+		t := l.tokens[l.tokPos].Type
+		return t == TokenNewline || t == TokenEOF
+	}
 	// Skip spaces.
 	pos := l.pos
 	for pos < len(l.line) && l.line[pos] == ' ' {

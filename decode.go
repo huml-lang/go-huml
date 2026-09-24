@@ -101,6 +101,9 @@ func setValueReflect(dst reflect.Value, src any) error {
 	// If the destination is an interface, set it directly.
 	if dst.Kind() == reflect.Interface {
 		if s.IsValid() {
+			if !s.Type().AssignableTo(dst.Type()) {
+				return fmt.Errorf("cannot unmarshal %T into %s", src, dst.Type())
+			}
 			dst.Set(s)
 		} else {
 			dst.Set(reflect.Zero(dst.Type()))
@@ -221,7 +224,7 @@ func setMap(dst reflect.Value, src any) error {
 
 	newMap := reflect.MakeMap(mapType)
 	for key, srcValue := range srcMap {
-		keyValue := reflect.ValueOf(key)
+		keyValue := reflect.ValueOf(key).Convert(keyType)
 		valueValue := reflect.New(valueType).Elem()
 
 		if err := setValueReflect(valueValue, srcValue); err != nil {
@@ -278,6 +281,9 @@ func setInt(dst reflect.Value, src any) error {
 		if v != math.Trunc(v) {
 			return fmt.Errorf("cannot unmarshal float %g into integer type", v)
 		}
+		if v < -0x1p63 || v >= 0x1p63 {
+			return fmt.Errorf("value %g overflows %s", v, dst.Type())
+		}
 		intVal := int64(v)
 		if dst.OverflowInt(intVal) {
 			return fmt.Errorf("value %g overflows %s", v, dst.Type())
@@ -308,6 +314,9 @@ func setUint(dst reflect.Value, src any) error {
 		}
 		if v != math.Trunc(v) {
 			return fmt.Errorf("cannot unmarshal float %g into integer type", v)
+		}
+		if v >= 0x1p64 {
+			return fmt.Errorf("value %g overflows %s", v, dst.Type())
 		}
 		uintVal := uint64(v)
 		if dst.OverflowUint(uintVal) {

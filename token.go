@@ -10,7 +10,7 @@ const (
 	TokenError
 
 	// Structural tokens.
-	TokenNewline // End of logical line (carries indent of next line).
+	TokenNewline // End of the current logical line.
 
 	// Key tokens.
 	TokenKey       // Bare key: alphanumeric with - and _.
@@ -34,6 +34,8 @@ const (
 	TokenEmptyDict // {}.
 	TokenListItem  // '-' list item marker.
 	TokenComma     // ',' inline separator.
+
+	tokenMultilineString // Opening triple-quote delimiter.
 )
 
 // Token represents a lexical token from HUML input.
@@ -63,6 +65,8 @@ func (t Token) String() string {
 		return ":"
 	case TokenVectorInd:
 		return "::"
+	case tokenMultilineString:
+		return `"""`
 	case TokenString:
 		return fmt.Sprintf("String(%q)", t.Value)
 	case TokenInt:
