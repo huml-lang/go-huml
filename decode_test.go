@@ -86,6 +86,26 @@ func TestAssertions(t *testing.T) {
 		t.Fatalf("error walking assertions directory: %v", err)
 	}
 }
+
+// Use valid values so these cases fail only because of their whitespace.
+func TestInvalidWhitespace(t *testing.T) {
+	for _, input := range []string{
+		"key:1",
+		"key:  1",
+		"key::1",
+		"key::  1",
+		"key : 1",
+		"dict:: key1: 1 , key2: 2",
+	} {
+		t.Run(input, func(t *testing.T) {
+			var result any
+			if err := Unmarshal([]byte(input), &result); err == nil {
+				t.Fatal("expected whitespace error")
+			}
+		})
+	}
+}
+
 func TestValues(t *testing.T) {
 	f := func(name, input string, expectedVal any) {
 		t.Helper()
