@@ -41,7 +41,6 @@ func newLexer(r io.Reader) *lexer {
 	return &lexer{
 		r:       bufio.NewReader(r),
 		lineNum: 0,
-		lineBuf: make([]byte, 0, 256),
 		strBuf:  make([]byte, 0, 64),
 	}
 }
@@ -120,26 +119,34 @@ func (l *lexer) readLine() error {
 	l.lineBuf = l.lineBuf[:0]
 
 	for {
-		b, err := l.r.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				if len(l.lineBuf) == 0 {
-					return io.EOF
-				}
-				// EOF with data - process as final line.
-				l.eof = true
-				break
-			}
+		line, err := l.r.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			l.lineBuf = append(l.lineBuf, line...)
+			continue
+		}
+		if err != nil && err != io.EOF {
 			return err
 		}
-		if b == '\n' {
-			break
+
+		// Short lines use the reader's buffer until the next readLine.
+		if len(l.lineBuf) > 0 {
+			l.lineBuf = append(l.lineBuf, line...)
+			line = l.lineBuf
 		}
-		l.lineBuf = append(l.lineBuf, b)
+		if err == io.EOF {
+			l.eof = true
+			if len(line) == 0 {
+				return io.EOF
+			}
+		}
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			line = line[:len(line)-1]
+		}
+		l.line = line
+		break
 	}
 
 	l.lineNum++
-	l.line = l.lineBuf
 	l.pos = 0
 	if !utf8.Valid(l.line) {
 		return l.errorf("invalid UTF-8")

@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -464,18 +463,19 @@ func (s *state) writeKVPair(key string, val reflect.Value, indent int) {
 	}
 }
 
-// A regular expression to check if a key is a "bare" key, meaning it doesn't
-// require quoting. According to the spec, it must start with a letter and
-// can be followed by alphanumeric characters, underscores, and hyphens.
-var bareKeyRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
-
-// quoteKeyIfNeeded wraps a key in quotes if it contains characters that are
-// not allowed in a bare key.
+// quoteKeyIfNeeded quotes keys outside the ASCII "bare" key.
 func quoteKeyIfNeeded(key string) string {
-	if bareKeyRegex.MatchString(key) {
-		return key
+	if len(key) == 0 || !isAlpha(key[0]) {
+		return quoteString(key)
 	}
-	return quoteString(key)
+
+	for i := 1; i < len(key); i++ {
+		if c := key[i]; !isAlphaNum(c) && c != '_' && c != '-' {
+			return quoteString(key)
+		}
+	}
+
+	return key
 }
 
 // HUML allows these escapes. All other Unicode characters remain as literals.

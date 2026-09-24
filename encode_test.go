@@ -45,3 +45,15 @@ func TestEncodeDoc(t *testing.T) {
 	// Deep-compare both.
 	assert.Equal(t, out, resJson, "test.huml and tests/documents/mixed.json should be deeply equal")
 }
+
+func TestQuoteKeyIfNeeded(t *testing.T) {
+	for _, key := range []string{"a", "Z", "a0", "a_b-c", "", "0a", "_a", "-a", "a b", "a:b", "a\"b", "ഭൂമി", "a🌏"} {
+		want := quoteString(key)
+		if key == "a" || key == "Z" || key == "a0" || key == "a_b-c" {
+			want = key
+		}
+		if got := quoteKeyIfNeeded(key); got != want {
+			t.Errorf("key %q: got %q, want %q", key, got, want)
+		}
+	}
+}
